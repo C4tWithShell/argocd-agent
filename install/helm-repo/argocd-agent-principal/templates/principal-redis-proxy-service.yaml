@@ -1,0 +1,24 @@
+{{- if .Values.service.redisProxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: argocd-agent-redis-proxy
+  namespace: {{ include "argocd-agent-principal.namespace" . }}
+  labels:
+    app.kubernetes.io/name: argocd-agent-redis-proxy
+    app.kubernetes.io/part-of: argocd-agent
+    app.kubernetes.io/component: redis-proxy
+    {{- include "argocd-agent-principal.labels" . | nindent 4 }}
+  {{- with .Values.service.redisProxy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ports:
+  - name: redis-proxy
+    protocol: TCP
+    port: {{ .Values.service.redisProxy.port }}
+    targetPort: {{ .Values.service.redisProxy.port }}
+  selector:
+    {{- include "argocd-agent-principal.selectorLabels" . | nindent 4 }}
+{{- end }}

@@ -1,0 +1,46 @@
+1. ArgoCD Agent Principal has been deployed.
+
+   Deployment: {{ include "argocd-agent-principal.fullname" . }}
+   Namespace:  {{ .Release.Namespace }}
+
+2. gRPC Service ({{ .Values.service.grpc.type }}):
+{{- if eq .Values.service.grpc.type "LoadBalancer" }}
+   Run the following to get the external IP/hostname once assigned:
+
+     kubectl get svc {{ include "argocd-agent-principal.fullname" . }} \
+       -n {{ .Release.Namespace }} \
+       -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+{{- else if eq .Values.service.grpc.type "NodePort" }}
+   Accessible via NodePort. Get the port with:
+
+     kubectl get svc {{ include "argocd-agent-principal.fullname" . }} \
+       -n {{ .Release.Namespace }}
+{{- else }}
+   Service type is ClusterIP. Use port-forward to access locally:
+
+     kubectl port-forward svc/{{ include "argocd-agent-principal.fullname" . }} \
+       8443:{{ .Values.service.grpc.port }} -n {{ .Release.Namespace }}
+{{- end }}
+
+3. Authentication method: {{ .Values.params.auth }}
+
+{{- if eq .Values.params.tls.allowGenerate "true" }}
+⚠️  WARNING: TLS auto-generation is enabled. This is insecure — use only for development.
+{{- end }}
+{{- if eq .Values.params.jwt.allowGenerate "true" }}
+⚠️  WARNING: JWT key auto-generation is enabled. This is insecure — use only for development.
+{{- end }}
+{{- if eq .Values.params.tls.insecurePlaintext "true" }}
+⚠️  WARNING: gRPC is running without TLS (insecure-plaintext=true). Ensure mTLS is handled at the service mesh level.
+{{- end }}
+
+4. Useful commands:
+
+   # Check principal logs
+   kubectl logs -l app.kubernetes.io/name={{ include "argocd-agent-principal.name" . }} \
+     -n {{ .Release.Namespace }} -f
+
+   # Health check
+   kubectl port-forward svc/{{ include "argocd-agent-principal.fullname" . }}-healthz \
+     8003:8003 -n {{ .Release.Namespace }}
+   curl http://localhost:8003/healthz
