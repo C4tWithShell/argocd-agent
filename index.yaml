@@ -1,0 +1,52 @@
+apiVersion: v1
+entries:
+  argocd-agent-agent:
+  - annotations:
+      charts.openshift.io/name: Argo CD Agent - Agent Component
+    apiVersion: v2
+    appVersion: 0.4.1
+    created: "2026-03-02T16:17:49.520143+03:00"
+    description: Argo CD Agent for connecting managed clusters to a Principal
+    digest: a44dd18f5439203706eb118d3289f37bff13f6ba79c7400319373e7aadca185f
+    home: https://github.com/argoproj-labs/argocd-agent
+    keywords:
+    - argocd
+    - gitops
+    - agent
+    kubeVersion: '>=1.24.0-0'
+    maintainers:
+    - name: Argo Project Maintainers
+      url: https://github.com/argoproj-labs/argocd-agent
+    name: argocd-agent-agent
+    sources:
+    - https://github.com/argoproj-labs/argocd-agent
+    type: application
+    urls:
+    - argocd-agent-agent-0.1.0.tgz
+    version: 0.1.0
+  argocd-agent-principal:
+  - annotations:
+      charts.openshift.io/name: Argo CD Agent - Principal Component
+    apiVersion: v2
+    appVersion: 0.4.1
+    created: "2026-03-02T16:17:49.521107+03:00"
+    description: Helm chart for the ArgoCD Agent Principal component
+    digest: 9141d92045ac8fa2cf2f2f404f775cb52c9396a69376d67029e4723c681f9f92
+    home: https://github.com/argoproj-labs/argocd-agent
+    keywords:
+    - argocd
+    - gitops
+    - agent
+    - principal
+    kubeVersion: '>=1.24.0-0'
+    maintainers:
+    - name: Argo Project Maintainers
+      url: https://github.com/argoproj-labs/argocd-agent
+    name: argocd-agent-principal
+    sources:
+    - https://github.com/argoproj-labs/argocd-agent
+    type: application
+    urls:
+    - argocd-agent-principal-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-03-02T16:17:49.518707+03:00"
