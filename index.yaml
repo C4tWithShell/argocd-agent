@@ -5,9 +5,9 @@ entries:
       charts.openshift.io/name: Argo CD Agent - Agent Component
     apiVersion: v2
     appVersion: 0.4.1
-    created: "2026-03-02T16:17:49.520143+03:00"
+    created: "2026-03-03T17:28:42.92294+03:00"
     description: Argo CD Agent for connecting managed clusters to a Principal
-    digest: a44dd18f5439203706eb118d3289f37bff13f6ba79c7400319373e7aadca185f
+    digest: 1801c6744265e7cffc3d36ed1fb8b13dd105ddd9369aa7a4996613756d860b61
     home: https://github.com/argoproj-labs/argocd-agent
     keywords:
     - argocd
@@ -29,9 +29,9 @@ entries:
       charts.openshift.io/name: Argo CD Agent - Principal Component
     apiVersion: v2
     appVersion: 0.4.1
-    created: "2026-03-02T16:17:49.521107+03:00"
+    created: "2026-03-03T17:28:42.923748+03:00"
     description: Helm chart for the ArgoCD Agent Principal component
-    digest: 9141d92045ac8fa2cf2f2f404f775cb52c9396a69376d67029e4723c681f9f92
+    digest: 82480a6773914cfd72888304c715ddd1fb02f0458abfe502a35546166f99d1eb
     home: https://github.com/argoproj-labs/argocd-agent
     keywords:
     - argocd
@@ -49,4 +49,4 @@ entries:
     urls:
     - argocd-agent-principal-0.1.0.tgz
     version: 0.1.0
-generated: "2026-03-02T16:17:49.518707+03:00"
+generated: "2026-03-03T17:28:42.921284+03:00"
