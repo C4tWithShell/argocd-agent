@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "affinity": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "Affinity rules for pod scheduling",
       "required": [],
       "title": "affinity",
@@ -16,7 +16,7 @@
       "type": "boolean"
     },
     "deploymentAnnotations": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "Annotations for the Deployment",
       "required": [],
       "title": "deploymentAnnotations",
@@ -201,14 +201,14 @@
       "type": "string"
     },
     "nodeSelector": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "#\nNode selector for scheduling the agent Pod.",
       "required": [],
       "title": "nodeSelector",
       "type": "object"
     },
     "params": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "#",
       "properties": {
         "allowedNamespaces": {
@@ -541,7 +541,7 @@
       "type": "object"
     },
     "podAnnotations": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "Annotations for the Pod",
       "required": [],
       "title": "podAnnotations",
@@ -570,14 +570,14 @@
       "type": "object"
     },
     "podLabels": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "Additional labels to add to the agent Pod.",
       "required": [],
       "title": "podLabels",
       "type": "object"
     },
     "podSecurityContext": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "#",
       "properties": {
         "fsGroup": {
@@ -891,7 +891,7 @@
       "type": "object"
     },
     "securityContext": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "#",
       "properties": {
         "allowPrivilegeEscalation": {
@@ -1184,18 +1184,18 @@
       "type": "object"
     },
     "serviceMonitor": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "#\nPrometheus ServiceMonitor configuration.",
       "properties": {
         "additionalLabels": {
-          "additionalProperties": false,
+          "additionalProperties": true,
           "description": "Prometheus ServiceMonitor labels",
           "required": [],
           "title": "additionalLabels",
           "type": "object"
         },
         "annotations": {
-          "additionalProperties": false,
+          "additionalProperties": true,
           "description": "Prometheus ServiceMonitor annotations",
           "required": [],
           "title": "annotations",
@@ -1254,7 +1254,7 @@
           "type": "string"
         },
         "tlsConfig": {
-          "additionalProperties": false,
+          "additionalProperties": true,
           "description": "Prometheus ServiceMonitor tlsConfig",
           "required": [],
           "title": "tlsConfig",
