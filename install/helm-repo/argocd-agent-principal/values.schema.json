@@ -102,7 +102,7 @@
       "description": "#",
       "properties": {
         "annotations": {
-          "additionalProperties": false,
+          "additionalProperties": true,
           "required": [],
           "title": "annotations",
           "type": "object"
@@ -1149,7 +1149,7 @@
       "description": "#\nServiceAccount configuration.",
       "properties": {
         "annotations": {
-          "additionalProperties": false,
+          "additionalProperties": true,
           "description": "Annotations for the ServiceAccount",
           "required": [],
           "title": "annotations",
