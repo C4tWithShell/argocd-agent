@@ -27,4 +27,18 @@ rules:
   verbs:
   - create
   - list
+- apiGroups:
+  - argoproj.io
+  resources:
+  - applications
+  - appprojects
+  - applicationsets
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - update
+  - delete
+  - patch
 {{- end }}
