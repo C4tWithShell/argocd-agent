@@ -5,24 +5,63 @@ metadata:
   labels:
     {{- include "argocd-agent-agent.labels" . | nindent 4 }}
 rules:
-- apiGroups:
-  - ""
+# Core Kubernetes resources
+- apiGroups: [""]
+  resources: 
+    - pods
+    - services
+    - endpoints
+    - persistentvolumeclaims
+    - configmaps
+    - secrets
+    - serviceaccounts
+    - namespaces
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Apps resources
+- apiGroups: ["apps"]
   resources:
-  - namespaces
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-- apiGroups:
-  - argoproj.io
+    - deployments
+    - replicasets
+    - statefulsets
+    - daemonsets
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Networking resources
+- apiGroups: ["networking.k8s.io"]
   resources:
-  - applications
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-  - update
-  - delete
-  - patch
+    - ingresses
+    - networkpolicies
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# RBAC resources
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources:
+    - roles
+    - rolebindings
+    - clusterroles
+    - clusterrolebindings
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Argo CD resources
+- apiGroups: ["argoproj.io"]
+  resources: ["*"]
+  verbs: ["*"]
+
+# API discovery (required for resource proxy)
+- apiGroups: [""]
+  resources: ["*"]
+  verbs: ["get", "list"]
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["get", "list"]
+
+# Cert-manager
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates", "issuers", "clusterissuers"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Monitoring
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["servicemonitors", "prometheusrules"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
