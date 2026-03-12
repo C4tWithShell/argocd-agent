@@ -421,7 +421,12 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 				[]string{"get"},
 				s.proxyVersion,
 			),
-
+			// Proxy OpenAPI schema requests to the agent
+			resourceproxy.WithRequestMatcher(
+				`^/openapi/v[23]$`,
+				[]string{"get"},
+				s.processOpenAPIRequest,
+			),
 			resourceproxy.WithLogger(s.options.resourceProxyLogger),
 
 			resourceproxy.WithTLSConfig(s.resourceProxyTLSConfig),
