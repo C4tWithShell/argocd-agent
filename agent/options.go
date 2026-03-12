@@ -156,3 +156,23 @@ func WithDestinationBasedMapping(enabled bool) AgentOption {
 		return nil
 	}
 }
+
+// WithIgnoreUnmanagedApps enables ignoring resources without the source UID annotation
+// during resync. When enabled, unmanaged resources will be silently skipped instead of
+// causing errors.
+func WithIgnoreUnmanagedApps(enabled bool) AgentOption {
+	return func(o *Agent) error {
+		o.ignoreUnmanagedApps = enabled
+		return nil
+	}
+}
+
+// WithAppLabelSelector sets an optional Kubernetes label selector that restricts
+// which Applications the agent watches. Only Applications matching this selector
+// will be listed, watched, and processed by the agent.
+func WithAppLabelSelector(selector string) AgentOption {
+	return func(o *Agent) error {
+		o.appLabelSelector = selector
+		return nil
+	}
+}

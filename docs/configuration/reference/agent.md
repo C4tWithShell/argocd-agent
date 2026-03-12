@@ -342,6 +342,21 @@ Use compression while sending data between Principal and Agent using gRPC.
 
 The redis host to connect to.
 
+### Redis Credentials directory path
+
+| | |
+|---|---|
+| **CLI Flag** | `--redis-creds-dir-path` |
+| **Environment Variable** | `REDIS_CREDS_DIR_PATH` |
+| **ConfigMap Entry** | N/A |
+| **Type** | String |
+| **Default** | `""` |
+
+The directory with `auth_username` file for Redis username (optional) and `auth` for Redis password.
+In kubernetes, this is intended to read a Secret mounted as a directory.
+
+Cannot be used together with `--redis-username` or `--redis-password`, or their respective environment variables.
+
 ### Redis Username
 
 | | |
@@ -352,7 +367,7 @@ The redis host to connect to.
 | **Type** | String |
 | **Default** | `""` |
 
-The username to connect to redis with.
+The username to connect to redis with. Prefer `--redis-creds-dir-path` for added security benefits.
 
 ### Redis Password
 
@@ -364,7 +379,7 @@ The username to connect to redis with.
 | **Type** | String |
 | **Default** | `""` |
 
-The password to connect to redis with.
+The password to connect to redis with. Prefer `--redis-creds-dir-path` for added security benefits.
 
 ## Resource Proxy Configuration
 
@@ -385,6 +400,23 @@ Enable the resource proxy to allow access to live resources on this agent cluste
 - Security policies that require restricted resource access
 - Performance optimization when live resource viewing is not needed
 - Troubleshooting resource proxy related issues
+
+## Application Filtering
+
+### Application Label Selector
+
+| | |
+|---|---|
+| **CLI Flag** | `--app-label-selector` |
+| **Environment Variable** | `ARGOCD_AGENT_APP_LABEL_SELECTOR` |
+| **ConfigMap Entry** | `agent.app-label-selector` |
+| **Type** | String |
+| **Default** | `""` (no additional filtering) |
+
+Kubernetes label selector that restricts which Applications the agent watches.
+Only Applications matching this selector will be listed, watched, and processed
+by the agent. This is combined with the default selector that already excludes
+applications with the ignore sync label.
 
 ## Kubernetes Configuration
 
@@ -411,3 +443,33 @@ Path to a kubeconfig file to use.
 | **Default** | `""` (uses current context) |
 
 Override the default kube context.
+
+## Managed Mode Options
+
+### Ignore Unmanaged Apps
+
+| | |
+|---|---|
+| **CLI Flag** | `--ignore-unmanaged-apps` |
+| **Environment Variable** | `ARGOCD_AGENT_IGNORE_UNMANAGED_APPS` |
+| **ConfigMap Entry** | N/A |
+| **Type** | Boolean |
+| **Default** | `false` |
+
+Ignore applications without the source UID annotation during resync instead of logging errors.
+
+In managed mode, applications created via the agent have a source UID annotation that links them to the principal. Pre-existing applications (created before the agent was installed, or created directly on the cluster) lack this annotation.
+
+When disabled (default), the agent logs errors for applications without the annotation during resync. When enabled, these applications are silently skipped with a debug log message.
+
+**Use Cases:**
+
+- Clusters with pre-existing Argo CD applications not managed by the agent
+- Gradual migration to agent-managed applications
+- Mixed environments with both managed and unmanaged applications
+
+**Example:**
+
+```bash
+argocd-agent agent --ignore-unmanaged-apps
+```

@@ -269,12 +269,17 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 
 	appFilters := s.defaultAppFilterChain()
 
+	appListOpts := config.AppLabelSelector(s.options.appLabelSelector)
+	if s.options.appLabelSelector != "" {
+		log().Infof("Application informer using label selector: %s", appListOpts.LabelSelector)
+	}
+
 	appInformerOpts := []informer.InformerOption[*v1alpha1.Application]{
 		informer.WithListHandler[*v1alpha1.Application](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
-			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().Applications("").List(ctx, config.DefaultLabelSelector())
+			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().Applications("").List(ctx, appListOpts)
 		}),
 		informer.WithWatchHandler[*v1alpha1.Application](func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().Applications("").Watch(ctx, config.DefaultLabelSelector())
+			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().Applications("").Watch(ctx, appListOpts)
 		}),
 		informer.WithAddHandler[*v1alpha1.Application](s.newAppCallback),
 		informer.WithUpdateHandler[*v1alpha1.Application](s.updateAppCallback),
@@ -300,6 +305,7 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 		informer.WithUpdateHandler[*v1alpha1.AppProject](s.updateAppProjectCallback),
 		informer.WithDeleteHandler[*v1alpha1.AppProject](s.deleteAppProjectCallback),
 		informer.WithGroupResource[*v1alpha1.AppProject]("argoproj.io", "appprojects"),
+		informer.WithFilters[*v1alpha1.AppProject](s.defaultAppProjectFilterChain()),
 	}
 
 	projManagerOpts := []appproject.AppProjectManagerOption{
@@ -792,6 +798,13 @@ func (s *Server) sendCurrentStateToAgent(agent string) error {
 			continue
 		}
 
+		// Don't send AppProjects that have SkipSyncLabel=true
+		if appProject.Labels != nil {
+			if val, ok := appProject.Labels[config.SkipSyncLabel]; ok && val == "true" {
+				continue
+			}
+		}
+
 		agentAppProject := appproject.AgentSpecificAppProject(appProject, agent, s.destinationBasedMapping)
 		ev := s.events.AppProjectEvent(event.SpecUpdate, &agentAppProject)
 		tracing.PopulateSpanFromObject(span, &appProject)
@@ -939,6 +952,28 @@ func (s *Server) defaultAppFilterChain() *filter.Chain[*v1alpha1.Application] {
 	// Ignore applications that have the skip sync label
 	c.AppendAdmitFilter(func(res *v1alpha1.Application) bool {
 		if v, ok := res.Labels[config.SkipSyncLabel]; ok && v == "true" {
+			return false
+		}
+		return true
+	})
+	// In destination-based mapping mode, apps without a destination name
+	// (e.g. in-cluster apps using destination.server) cannot be routed to
+	// any agent, so filter them out.
+	if s.options.destinationBasedMapping {
+		c.AppendAdmitFilter(func(res *v1alpha1.Application) bool {
+			name := res.Spec.Destination.Name
+			return name != "" && name != "in-cluster"
+		})
+	}
+	return c
+}
+
+// defaultAppFilterChain returns the default filter chain for server s to use
+func (s *Server) defaultAppProjectFilterChain() *filter.Chain[*v1alpha1.AppProject] {
+	c := filter.NewFilterChain[*v1alpha1.AppProject]()
+	// Ignore AppProjects that have the skip sync label
+	c.AppendAdmitFilter(func(appProj *v1alpha1.AppProject) bool {
+		if v, ok := appProj.Labels[config.SkipSyncLabel]; ok && v == "true" {
 			return false
 		}
 		return true

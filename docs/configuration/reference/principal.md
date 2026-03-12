@@ -97,6 +97,23 @@ Labels to apply to auto-created namespaces.
 
 **Example:** `managed-by=argocd-agent,environment=production`
 
+## Application Filtering
+
+### Application Label Selector
+
+| | |
+|---|---|
+| **CLI Flag** | `--app-label-selector` |
+| **Environment Variable** | `ARGOCD_PRINCIPAL_APP_LABEL_SELECTOR` |
+| **ConfigMap Entry** | `principal.app-label-selector` |
+| **Type** | String |
+| **Default** | `""` (no additional filtering) |
+
+Kubernetes label selector that restricts which Applications the principal
+watches. Only Applications matching this selector will be listed, watched, and
+processed by the principal. This is combined with the default selector that
+already excludes applications with the ignore sync label.
+
 ## TLS Configuration
 
 ### TLS Secret Name
@@ -524,6 +541,33 @@ Redis server hostname and port.
 | **Valid Values** | `gzip`, `none` |
 
 Compression algorithm required by Redis.
+
+### Redis Credentials directory path
+
+| | |
+|---|---|
+| **CLI Flag** | `--redis-creds-dir-path` |
+| **Environment Variable** | `REDIS_CREDS_DIR_PATH` |
+| **ConfigMap Entry** | N/A |
+| **Type** | String |
+| **Default** | `""` |
+
+The directory with `auth` file for Redis password.
+In kubernetes, this is intended to read a Secret mounted as a directory.
+
+Cannot be used together with `--redis-password`, or its respective environment variables.
+
+### Redis Password
+
+| | |
+|---|---|
+| **CLI Flag** | `--redis-password` |
+| **Environment Variable** | `REDIS_PASSWORD` |
+| **ConfigMap Entry** | N/A |
+| **Type** | String |
+| **Default** | `""` |
+
+The password to connect to redis with. Prefer `--redis-creds-dir-path` for added security benefits.
 
 ## Kubernetes Configuration
 

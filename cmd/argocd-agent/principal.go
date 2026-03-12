@@ -93,6 +93,7 @@ func NewPrincipalRunCommand() *cobra.Command {
 
 		redisAddress         string
 		redisPassword        string
+		redisCredsDirPath    string
 		redisCompressionType string
 		healthzPort          int
 
@@ -103,6 +104,7 @@ func NewPrincipalRunCommand() *cobra.Command {
 		otlpInsecure bool
 
 		destinationBasedMapping bool
+		appLabelSelector        string
 
 		enableSelfClusterRegistration bool
 		selfRegClientCertSecretName   string
@@ -337,9 +339,14 @@ func NewPrincipalRunCommand() *cobra.Command {
 
 			opts = append(opts, principal.WithWebSocket(enableWebSocket))
 			opts = append(opts, principal.WithKeepAliveMinimumInterval(keepAliveMinimumInterval))
+			_, redisPassword, err := redisCreds(redisCredsDirPath, "", redisPassword)
+			if err != nil {
+				cmdutil.Fatal("Failed loading Redis credentials: %s", err.Error())
+			}
 			opts = append(opts, principal.WithRedis(redisAddress, redisPassword, redisCompressionType))
 			opts = append(opts, principal.WithHealthzPort(healthzPort))
 			opts = append(opts, principal.WithDestinationBasedMapping(destinationBasedMapping))
+			opts = append(opts, principal.WithAppLabelSelector(appLabelSelector))
 			opts = append(opts, principal.WithMaxGRPCMessageSize(maxGRPCMessageSize))
 
 			// Self agent registration validation and options
@@ -491,6 +498,9 @@ func NewPrincipalRunCommand() *cobra.Command {
 	command.Flags().StringVar(&redisPassword, "redis-password",
 		env.StringWithDefault("REDIS_PASSWORD", nil, ""),
 		"The password to connect to redis with")
+	command.Flags().StringVar(&redisCredsDirPath, "redis-creds-dir-path",
+		env.StringWithDefault("REDIS_CREDS_DIR_PATH", nil, ""),
+		"The redis directory with 'auth' file for Redis password")
 
 	command.Flags().StringVar(&redisCompressionType, "redis-compression-type",
 		env.StringWithDefault("ARGOCD_PRINCIPAL_REDIS_COMPRESSION_TYPE", nil, string(cacheutil.RedisCompressionGZip)),
@@ -516,6 +526,10 @@ func NewPrincipalRunCommand() *cobra.Command {
 	command.Flags().BoolVar(&destinationBasedMapping, "destination-based-mapping",
 		env.BoolWithDefault("ARGOCD_PRINCIPAL_DESTINATION_BASED_MAPPING", false),
 		"Map applications to agents based on spec.destination.name instead of namespace")
+
+	command.Flags().StringVar(&appLabelSelector, "app-label-selector",
+		env.StringWithDefault("ARGOCD_PRINCIPAL_APP_LABEL_SELECTOR", nil, ""),
+		"Kubernetes label selector to restrict which Applications the principal watches")
 
 	command.Flags().StringVar(&kubeConfig, "kubeconfig", "", "Path to a kubeconfig file to use")
 	command.Flags().StringVar(&kubeContext, "kubecontext", "", "Override the default kube context")

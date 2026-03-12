@@ -27,6 +27,12 @@
       "title": "argoCdRedisPasswordKey",
       "type": "string"
     },
+    "appLabelSelector": {
+      "default": "",
+      "description": "Kubernetes label selector to restrict which Applications the agent watches. Only matching Applications will be listed, watched, and processed.",
+      "title": "appLabelSelector",
+      "type": "string"
+    },
     "argoCdRedisSecretName": {
       "default": "argocd-redis",
       "description": "ArgoCD Redis password secret name.",
@@ -38,12 +44,6 @@
       "description": "Authentication mode for connecting to the principal.",
       "title": "auth",
       "type": "string"
-    },
-    "automountServiceAccountToken": {
-      "default": true,
-      "description": "Automount API credentials for the Service Account into the pod.",
-      "title": "automountServiceAccountToken",
-      "type": "boolean"
     },
     "cacheRefreshInterval": {
       "default": "10s",
@@ -730,7 +730,6 @@
     "tlsRootCASecretName",
     "userPasswordSecretName",
     "resources",
-    "automountServiceAccountToken",
     "serviceAccount",
     "nodeSelector",
     "affinity",

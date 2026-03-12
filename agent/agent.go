@@ -131,10 +131,18 @@ type Agent struct {
 	// - The agent watches for applications in all namespaces
 	destinationBasedMapping bool
 
+	// ignoreUnmanagedApps when true, resources without the source UID annotation
+	// will be silently skipped during resync instead of causing errors.
+	ignoreUnmanagedApps bool
+
 	// createNamespace when true, the agent will create namespaces that
 	// don't exist before creating applications. This is used in combination with
 	// destination-based mapping.
 	createNamespace bool
+
+	// appLabelSelector is an optional Kubernetes label selector that restricts
+	// which Applications the agent watches.
+	appLabelSelector string
 }
 
 const defaultQueueName = "default"
@@ -238,12 +246,17 @@ func NewAgent(ctx context.Context, client *kube.KubernetesClient, namespace stri
 		appNamespace = ""
 	}
 
+	appListOpts := config.AppLabelSelector(a.appLabelSelector)
+	if a.appLabelSelector != "" {
+		log().Infof("Application informer using label selector: %s", appListOpts.LabelSelector)
+	}
+
 	// appListFunc and watchFunc are anonymous functions for the informer
 	appListFunc := func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
-		return client.ApplicationsClientset.ArgoprojV1alpha1().Applications(appNamespace).List(ctx, config.DefaultLabelSelector())
+		return client.ApplicationsClientset.ArgoprojV1alpha1().Applications(appNamespace).List(ctx, appListOpts)
 	}
 	appWatchFunc := func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-		return client.ApplicationsClientset.ArgoprojV1alpha1().Applications(appNamespace).Watch(ctx, config.DefaultLabelSelector())
+		return client.ApplicationsClientset.ArgoprojV1alpha1().Applications(appNamespace).Watch(ctx, appListOpts)
 	}
 
 	appInformerOptions := []informer.InformerOption[*v1alpha1.Application]{
@@ -298,6 +311,7 @@ func NewAgent(ctx context.Context, client *kube.KubernetesClient, namespace stri
 		informer.WithAddHandler[*v1alpha1.AppProject](a.addAppProjectCreationToQueue),
 		informer.WithUpdateHandler[*v1alpha1.AppProject](a.addAppProjectUpdateToQueue),
 		informer.WithDeleteHandler[*v1alpha1.AppProject](a.addAppProjectDeletionToQueue),
+		informer.WithFilters[*v1alpha1.AppProject](a.DefaultAppProjectFilterChain()),
 		informer.WithGroupResource[*v1alpha1.AppProject]("argoproj.io", "appprojects"),
 	}
 
