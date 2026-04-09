@@ -138,7 +138,6 @@ func (a *Agent) processIncomingResourceRequest(ev *event.Event) error {
 	return nil
 }
 
-// processIncomingPostResourceRequest handles POST requests for resources
 func (a *Agent) processIncomingPostResourceRequest(ctx context.Context, req *event.ResourceRequest, gvr schema.GroupVersionResource) (*unstructured.Unstructured, error) {
 	resourceObj := &unstructured.Unstructured{}
 	if err := json.Unmarshal(req.Body, resourceObj); err != nil {
