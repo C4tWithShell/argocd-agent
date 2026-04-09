@@ -105,6 +105,7 @@ Kubernetes: `>=1.24.0-0`
 | tlsCipherSuites | string | `""` | Comma-separated list of TLS cipher suites. Empty uses Go defaults. |
 | tlsClientCertPath | string | `""` | Path to the TLS client certificate. |
 | tlsClientInSecure | string | `"false"` | Whether to skip TLS verification for client connections. |
+| tlsInsecurePlaintext | bool | `false` | Whether to connect to the principal without TLS |
 | tlsClientKeyPath | string | `""` | Path to the TLS client key. |
 | tlsMaxVersion | string | `""` | Maximum TLS version to use (tls1.1, tls1.2, tls1.3). Empty uses highest available. |
 | tlsMinVersion | string | `""` | Minimum TLS version to use (tls1.1, tls1.2, tls1.3). Empty uses Go default. |

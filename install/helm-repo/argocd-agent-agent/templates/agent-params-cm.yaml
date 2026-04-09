@@ -121,7 +121,7 @@ data:
   # Default: ""
   agent.label-selector: {{ .Values.labelSelector | quote }}
   # agent.redis.tls.enabled: Whether to enable TLS for Redis connections.
-  # Default: true
+  # Default: false
   agent.redis.tls.enabled: {{ .Values.redisTLS.enabled | quote }}
   # agent.redis.tls.ca-path: Path to CA certificate for verifying Redis TLS certificate.
   # Default: ""

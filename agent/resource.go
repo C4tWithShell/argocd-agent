@@ -52,12 +52,6 @@ func (a *Agent) processIncomingResourceRequest(ev *event.Event) error {
 
 	logCtx.Tracef("Start processing %v", rreq)
 
-	// Handle OpenAPI schema requests specially — the principal encodes the
-	// openapi path (e.g. "/openapi/v2") in the Name field with no GVR set.
-	if strings.HasPrefix(rreq.Name, "/openapi/") {
-		return a.processOpenAPISchemaRequest(rreq)
-	}
-
 	ctx, cancel := context.WithTimeout(a.context, defaultResourceRequestTimeout)
 	defer cancel()
 
@@ -141,45 +135,6 @@ func (a *Agent) processIncomingResourceRequest(ev *event.Event) error {
 	q.Add(a.emitter.NewResourceResponseEvent(rreq.UUID, event.HTTPStatusFromError(status), string(jsonres)))
 	logCtx.Tracef("Emitted resource response")
 
-	return nil
-}
-
-// processOpenAPISchemaRequest handles OpenAPI schema requests forwarded from
-// the principal's resource proxy. It fetches the schema directly from the
-// local Kubernetes API and returns it via the event queue.
-func (a *Agent) processOpenAPISchemaRequest(rreq *event.ResourceRequest) error {
-	logCtx := a.logResourceProxy().WithField("method", "processOpenAPISchemaRequest")
-
-	ctx, cancel := context.WithTimeout(a.context, defaultResourceRequestTimeout)
-	defer cancel()
-
-	restClient := a.kubeClient.Clientset.Discovery().RESTClient()
-	result := restClient.Get().AbsPath(rreq.Name).Do(ctx)
-
-	raw, err := result.Raw()
-	var statusCode int
-	if err != nil {
-		logCtx.Errorf("Failed to fetch OpenAPI schema at %s: %v", rreq.Name, err)
-		statusCode = http.StatusInternalServerError
-		if statusErr, ok := err.(interface{ Status() v1.Status }); ok {
-			code := statusErr.Status().Code
-			if code != 0 {
-				statusCode = int(code)
-			}
-		}
-		raw = nil
-	} else {
-		statusCode = http.StatusOK
-	}
-
-	logCtx.Infof("OpenAPI schema fetched from %s, status=%d, size=%d", rreq.Name, statusCode, len(raw))
-
-	q := a.queues.SendQ(defaultQueueName)
-	if q == nil {
-		logCtx.Error("Remote queue disappeared")
-		return nil
-	}
-	q.Add(a.emitter.NewResourceResponseEvent(rreq.UUID, statusCode, string(raw)))
 	return nil
 }
 
