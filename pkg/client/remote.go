@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/argoproj-labs/argocd-agent/internal/auth"
@@ -48,6 +49,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 )
+
+// Time interval left for access token refresh
+const tokenRefreshThreshold = 30 * time.Second
 
 type timeouts struct {
 	dialTimeout         time.Duration
@@ -76,11 +80,13 @@ type Remote struct {
 	hostname          string
 	port              int
 	tlsConfig         *tls.Config
+	tokenMu           sync.Mutex
 	accessToken       *token
 	refreshToken      *token
 	authMethod        string
 	creds             auth.Credentials
 	backoff           wait.Backoff
+	connMu            sync.Mutex
 	conn              *grpc.ClientConn
 	clientID          string
 	clientMode        types.AgentMode
@@ -399,9 +405,16 @@ func (r *Remote) retriable(err error) bool {
 
 func (r *Remote) unaryAuthInterceptor(ctx context.Context, method string, req interface{}, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	log().Infof("Outgoing unary call to %s", method)
+
+	// Auth methods do not need token refresh, so we can call the invoker directly
+	if isAuthMethod(method) {
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
 	nCtx := ctx
-	if r.accessToken != nil && r.accessToken.RawToken != "" {
-		nCtx = metadata.AppendToOutgoingContext(ctx, "authorization", r.accessToken.RawToken)
+
+	// For other methods, we need to check if the token is valid or refresh it
+	if token := r.getValidAccessToken(ctx); token != "" {
+		nCtx = metadata.AppendToOutgoingContext(ctx, "authorization", token)
 	}
 	return invoker(nCtx, method, req, reply, cc, opts...)
 }
@@ -409,8 +422,8 @@ func (r *Remote) unaryAuthInterceptor(ctx context.Context, method string, req in
 func (r *Remote) streamAuthInterceptor(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	log().Infof("Outgoing stream call to %s", method)
 	nCtx := ctx
-	if r.accessToken != nil && r.accessToken.RawToken != "" {
-		nCtx = metadata.AppendToOutgoingContext(ctx, "authorization", r.accessToken.RawToken)
+	if token := r.getValidAccessToken(ctx); token != "" {
+		nCtx = metadata.AppendToOutgoingContext(ctx, "authorization", token)
 	}
 	return streamer(nCtx, desc, cc, method, opts...)
 }
@@ -424,6 +437,82 @@ func connectBackoff() wait.Backoff {
 	}
 }
 
+func isAuthMethod(method string) bool {
+	return method == "/authapi.Authentication/Authenticate" ||
+		method == "/authapi.Authentication/RefreshToken"
+}
+
+// getValidAccessToken checks whether the access token is about to expire and,
+// if yes, then it uses the stored refresh token to obtain a new one from the principal.
+// It returns refreshed or existing token to the caller which is attached to the request.
+func (r *Remote) getValidAccessToken(ctx context.Context) string {
+	r.tokenMu.Lock()
+	defer r.tokenMu.Unlock()
+
+	if r.accessToken == nil || r.refreshToken == nil {
+		if r.accessToken != nil {
+			return r.accessToken.RawToken
+		}
+		return ""
+	}
+
+	exp, err := r.accessToken.Claims.GetExpirationTime()
+	if err != nil || exp == nil {
+		return r.accessToken.RawToken
+	}
+
+	remainingTime := time.Until(exp.Time)
+	if remainingTime > tokenRefreshThreshold {
+		return r.accessToken.RawToken
+	}
+
+	log().Info("Access token is about to expire, refreshing")
+
+	conn := r.Conn()
+	if conn == nil {
+		log().Warn("No connection available for token refresh")
+		return r.accessToken.RawToken
+	}
+
+	authClient := authapi.NewAuthenticationClient(conn)
+	resp, err := authClient.RefreshToken(ctx, &authapi.RefreshTokenRequest{
+		RefreshToken: r.refreshToken.RawToken,
+	})
+	if err != nil {
+		log().Warnf("Token refresh failed: %v", err)
+		return r.accessToken.RawToken
+	}
+
+	newAccessToken, err := NewToken(resp.AccessToken)
+	if err != nil {
+		log().Warnf("Invalid access token from refresh response: %v", err)
+		return r.accessToken.RawToken
+	}
+	r.accessToken = newAccessToken
+
+	if resp.RefreshToken != "" {
+		newRefreshToken, err := NewToken(resp.RefreshToken)
+		if err != nil {
+			log().Warnf("Could not parse new refresh token: %v", err)
+		} else {
+			r.refreshToken = newRefreshToken
+		}
+	}
+
+	log().Info("Access token refreshed successfully")
+	return r.accessToken.RawToken
+}
+
+// Disconnect closes the underlying gRPC connection and nils it out.
+func (r *Remote) Disconnect() {
+	r.connMu.Lock()
+	defer r.connMu.Unlock()
+	if r.conn != nil {
+		r.conn.Close()
+		r.conn = nil
+	}
+}
+
 // Connect connects this Remote to the remote host and performs authentication.
 // If the remote is configured with a retry, Connect will keep trying to
 // establish a connection to the remote host until either the number of maximum
@@ -432,6 +521,14 @@ func connectBackoff() wait.Backoff {
 // When Connect returns nil, the connection was successfully established and an
 // authentication token has been received.
 func (r *Remote) Connect(ctx context.Context, forceReauth bool) error {
+	r.connMu.Lock()
+	if r.conn != nil {
+		log().Warn("Connect called with existing connection; closing stale conn")
+		r.conn.Close()
+		r.conn = nil
+	}
+	r.connMu.Unlock()
+
 	cparams := grpc.ConnectParams{
 		MinConnectTimeout: 365 * 24 * time.Hour,
 	}
@@ -527,6 +624,8 @@ func (r *Remote) Connect(ctx context.Context, forceReauth bool) error {
 				return ierr
 			}
 
+			r.tokenMu.Lock()
+			defer r.tokenMu.Unlock()
 			r.accessToken, ierr = NewToken(resp.AccessToken)
 			if ierr != nil {
 				logrus.Warnf("Auth failure: %v (retrying in %v)", ierr, cBackoff.Step())
@@ -539,7 +638,7 @@ func (r *Remote) Connect(ctx context.Context, forceReauth bool) error {
 			}
 			r.clientID, ierr = r.accessToken.Claims.GetSubject()
 			if ierr != nil {
-				return err
+				return ierr
 			}
 			authenticated = true
 			return nil
@@ -564,13 +663,17 @@ func (r *Remote) Connect(ctx context.Context, forceReauth bool) error {
 		return err
 	}
 	log().Infof("Connected to %s", vr.Version)
+	r.connMu.Lock()
 	r.conn = conn
+	r.connMu.Unlock()
 	return nil
 }
 
 // Conn returns this remote's underlying gRPC connection object. It should
 // be treated as read-only.
 func (r *Remote) Conn() *grpc.ClientConn {
+	r.connMu.Lock()
+	defer r.connMu.Unlock()
 	return r.conn
 }
 

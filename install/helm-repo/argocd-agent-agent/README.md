@@ -27,7 +27,6 @@ Kubernetes: `>=1.24.0-0`
 | affinity | object | `{}` | Affinity rules for the agent Pod. |
 | agentMode | string | `"autonomous"` | Agent mode of operation. |
 | allowedNamespaces | string | `""` | Comma-separated list of additional namespaces the agent is allowed to manage applications in (used with applications in any namespace feature). Supports glob patterns (e.g., "team-*,prod-*"). |
-| appLabelSelector | string | `""` | Kubernetes label selector to restrict which Applications the agent watches. Only matching Applications will be listed, watched, and processed. |
 | argoCdRedisPasswordKey | string | `"auth"` | ArgoCD Redis password key. |
 | argoCdRedisSecretName | string | `"argocd-redis"` | ArgoCD Redis password secret name. |
 | auth | string | `"mtls:any"` | Authentication mode for connecting to the principal. |
@@ -43,6 +42,7 @@ Kubernetes: `>=1.24.0-0`
 | image.repository | string | `"ghcr.io/argoproj-labs/argocd-agent/argocd-agent"` | Container image repository for the agent. |
 | image.tag | string | `"latest"` | Container image tag for the agent. |
 | keepAliveInterval | string | `"50s"` | Keep-alive interval for connections. |
+| labelSelector | string | `""` | Kubernetes label selector to restrict which resources the agent watches. Only matching resources will be listed, watched, and processed. |
 | logFormat | string | `"text"` | Log format for the agent (text or json). |
 | logLevel | string | `"info"` | Log level for the agent. |
 | metricsPort | string | `"8181"` | Metrics server port exposed by the agent. |
@@ -64,6 +64,11 @@ Kubernetes: `>=1.24.0-0`
 | probes.readiness.periodSeconds | int | `10` | Frequency of readiness probes. |
 | probes.readiness.timeoutSeconds | int | `2` | Timeout for readiness probe. |
 | redisAddress | string | `"argocd-redis:6379"` | Redis address used by the agent. |
+| redisTLS | object | `{"caPath":"/app/config/redis-tls/ca.crt","enabled":false,"insecure":false,"secretName":"argocd-redis-tls"}` | Redis TLS configuration. |
+| redisTLS.caPath | string | `"/app/config/redis-tls/ca.crt"` | Path to CA certificate for verifying Redis TLS certificate. This path is where the CA certificate will be mounted inside the container. |
+| redisTLS.enabled | bool | `false` | Enable TLS for Redis connections. |
+| redisTLS.insecure | bool | `false` | Skip verification of Redis TLS certificate (INSECURE - for development only). |
+| redisTLS.secretName | string | `"argocd-redis-tls"` | Name of the Kubernetes Secret containing the Redis TLS CA certificate. The secret should have a key 'ca.crt' containing the CA certificate in PEM format. Set to empty string to disable mounting (requires system CAs or insecure mode). |
 | redisUsername | string | `""` | Redis username for authentication. |
 | replicaCount | int | `1` | Number of replicas for the agent Deployment. |
 | resources | object | `{"limits":{"cpu":"500m","memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resource requests and limits for the agent Pod. |

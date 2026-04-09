@@ -39,7 +39,7 @@ const resourceRequestRegexp = `^/(?:api|apis|(?:api|apis/(?P<group>[^\/]+))/(?P<
 // resource.
 //
 // TODO(jannfis): Make the timeout configurable
-const requestTimeout = 10 * time.Second
+const requestTimeout = 30 * time.Second
 
 // processResourceRequest is being executed by the resource proxy once it
 // received a request for a specific resource. It will encapsulate this request
@@ -77,7 +77,7 @@ func (s *Server) processResourceRequest(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// If the agent is not connected, return early
-	if !s.queues.HasQueuePair(agentName) {
+	if !s.isAgentConnected(agentName) {
 		logCtx.Debugf("Agent is not connected, stop proxying")
 		w.WriteHeader(http.StatusBadGateway)
 		return
@@ -294,7 +294,7 @@ func (s *Server) sendSynchronousRedisMessageToAgent(agentName string, connection
 	logCtx := log().WithField("function", "sendSynchronousRedisMessageToAgent").WithField("connectionUUID", connectionUUID).WithField("agentName", agentName)
 
 	// If the agent is not connected, return early
-	if !s.queues.HasQueuePair(agentName) {
+	if !s.isAgentConnected(agentName) {
 		logCtx.Debugf("Agent is not connected, stop proxying")
 		return nil
 	}

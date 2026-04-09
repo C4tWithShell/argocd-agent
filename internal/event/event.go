@@ -50,10 +50,8 @@ const (
 	Pong                       EventType = TypePrefix + ".pong"
 	Create                     EventType = TypePrefix + ".create"
 	Delete                     EventType = TypePrefix + ".delete"
-	Update                     EventType = TypePrefix + ".update"
 	SpecUpdate                 EventType = TypePrefix + ".spec-update"
 	StatusUpdate               EventType = TypePrefix + ".status-update"
-	OperationUpdate            EventType = TypePrefix + ".operation-update"
 	TerminateOperation         EventType = TypePrefix + ".terminate-operation"
 	EventProcessed             EventType = TypePrefix + ".processed"
 	GetRequest                 EventType = TypePrefix + ".get"
@@ -78,15 +76,18 @@ const (
 	TargetResourceResync         EventTarget = "resourceResync"
 	TargetClusterCacheInfoUpdate EventTarget = "clusterCacheInfoUpdate"
 	TargetRepository             EventTarget = "repository"
+	TargetGPGKey                 EventTarget = "gpgkey"
 	TargetContainerLog           EventTarget = "containerlog"
 	TargetHeartbeat              EventTarget = "heartbeat"
 	TargetTerminal               EventTarget = "terminal"
+	TargetApplicationSet         EventTarget = "applicationset"
 )
 
 const (
-	resourceID string = "resourceid"
-	eventID    string = "eventid"
-	sentAt     string = "sentat"
+	resourceID   string = "resourceid"
+	eventID      string = "eventid"
+	sentAt       string = "sentat"
+	principalUID string = "principaluid"
 )
 
 // SetSentAt stamps the current time on an event as the send time.
@@ -105,6 +106,20 @@ func SentAt(ev *cloudevents.Event) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// SetPrincipalUID stamps the principal's persistent identity on an event.
+func SetPrincipalUID(ev *cloudevents.Event, uid string) {
+	ev.SetExtension(principalUID, uid)
+}
+
+// PrincipalUID returns the principal identity from an event, or empty string if not set.
+func PrincipalUID(ev *cloudevents.Event) string {
+	val, ok := ev.Extensions()[principalUID].(string)
+	if !ok {
+		return ""
+	}
+	return val
 }
 
 var (
@@ -200,6 +215,18 @@ func (evs EventSource) AppProjectEvent(evType EventType, appProject *v1alpha1.Ap
 	return &cev
 }
 
+func (evs EventSource) ApplicationSetEvent(evType EventType, appSet *v1alpha1.ApplicationSet) *cloudevents.Event {
+	cev := cloudevents.NewEvent()
+	cev.SetSource(evs.source)
+	cev.SetSpecVersion(cloudEventSpecVersion)
+	cev.SetType(evType.String())
+	cev.SetExtension(eventID, createEventID(appSet.ObjectMeta))
+	cev.SetExtension(resourceID, createResourceID(appSet.ObjectMeta))
+	cev.SetDataSchema(TargetApplicationSet.String())
+	_ = cev.SetData(cloudevents.ApplicationJSON, appSet)
+	return &cev
+}
+
 type ClusterCacheInfo struct {
 	ApplicationsCount int64 `json:"applicationsCount"`
 	APIsCount         int64 `json:"apisCount"`
@@ -229,6 +256,18 @@ func (evs EventSource) RepositoryEvent(evType EventType, repository *corev1.Secr
 	cev.SetDataSchema(TargetRepository.String())
 
 	_ = cev.SetData(cloudevents.ApplicationJSON, repository)
+	return &cev
+}
+
+func (evs EventSource) GPGKeyEvent(evType EventType, cm *corev1.ConfigMap) *cloudevents.Event {
+	cev := cloudevents.NewEvent()
+	cev.SetSource(evs.source)
+	cev.SetSpecVersion(cloudEventSpecVersion)
+	cev.SetType(evType.String())
+	cev.SetExtension(eventID, createEventID(cm.ObjectMeta))
+	cev.SetExtension(resourceID, createResourceID(cm.ObjectMeta))
+	cev.SetDataSchema(TargetGPGKey.String())
+	_ = cev.SetData(cloudevents.ApplicationJSON, cm)
 	return &cev
 }
 
@@ -619,6 +658,8 @@ func Target(raw *cloudevents.Event) EventTarget {
 		return TargetAppProject
 	case TargetRepository.String():
 		return TargetRepository
+	case TargetGPGKey.String():
+		return TargetGPGKey
 	case TargetResource.String():
 		return TargetResource
 	case TargetEventAck.String():
@@ -635,6 +676,8 @@ func Target(raw *cloudevents.Event) EventTarget {
 		return TargetHeartbeat
 	case TargetTerminal.String():
 		return TargetTerminal
+	case TargetApplicationSet.String():
+		return TargetApplicationSet
 	}
 	return ""
 }
@@ -689,10 +732,22 @@ func (ev Event) AppProject() (*v1alpha1.AppProject, error) {
 	return proj, err
 }
 
+func (ev Event) ApplicationSet() (*v1alpha1.ApplicationSet, error) {
+	appSet := &v1alpha1.ApplicationSet{}
+	err := ev.event.DataAs(appSet)
+	return appSet, err
+}
+
 func (ev Event) Repository() (*corev1.Secret, error) {
 	repo := &corev1.Secret{}
 	err := ev.event.DataAs(repo)
 	return repo, err
+}
+
+func (ev Event) GPGKey() (*corev1.ConfigMap, error) {
+	cm := &corev1.ConfigMap{}
+	err := ev.event.DataAs(cm)
+	return cm, err
 }
 
 // ResourceRequest gets the resource request payload from an event

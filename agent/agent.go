@@ -16,7 +16,9 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -26,6 +28,7 @@ import (
 	"github.com/argoproj-labs/argocd-agent/internal/backend"
 	kubeapp "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/application"
 	kubeappproject "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/appproject"
+	kubegpgkey "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/gpgkey"
 	kubenamespace "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/namespace"
 	kuberepository "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/repository"
 	"github.com/argoproj-labs/argocd-agent/internal/cache"
@@ -37,19 +40,23 @@ import (
 	"github.com/argoproj-labs/argocd-agent/internal/manager"
 	"github.com/argoproj-labs/argocd-agent/internal/manager/application"
 	"github.com/argoproj-labs/argocd-agent/internal/manager/appproject"
+	"github.com/argoproj-labs/argocd-agent/internal/manager/gpgkey"
 	"github.com/argoproj-labs/argocd-agent/internal/manager/repository"
 	"github.com/argoproj-labs/argocd-agent/internal/metrics"
 	"github.com/argoproj-labs/argocd-agent/internal/queue"
 	"github.com/argoproj-labs/argocd-agent/internal/resources"
+	"github.com/argoproj-labs/argocd-agent/internal/tlsutil"
 	"github.com/argoproj-labs/argocd-agent/internal/version"
 	"github.com/argoproj-labs/argocd-agent/pkg/client"
 	"github.com/argoproj-labs/argocd-agent/pkg/types"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 
+	"github.com/argoproj/argo-cd/v3/common"
 	"github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	cacheutil "github.com/argoproj/argo-cd/v3/util/cache"
 	appstatecache "github.com/argoproj/argo-cd/v3/util/cache/appstate"
@@ -76,6 +83,7 @@ type Agent struct {
 	appManager       *application.ApplicationManager
 	projectManager   *appproject.AppProjectManager
 	repoManager      *repository.RepositoryManager
+	gpgKeyManager    *gpgkey.GPGKeyManager
 	namespaceManager *kubenamespace.KubernetesBackend
 	mode             types.AgentMode
 	// queues is a queue of create/update/delete events to send to the principal
@@ -140,9 +148,9 @@ type Agent struct {
 	// destination-based mapping.
 	createNamespace bool
 
-	// appLabelSelector is an optional Kubernetes label selector that restricts
-	// which Applications the agent watches.
-	appLabelSelector string
+	// labelSelector is an optional Kubernetes label selector that restricts
+	// which resources the agent can process.
+	labelSelector string
 }
 
 const defaultQueueName = "default"
@@ -214,6 +222,10 @@ func NewAgent(ctx context.Context, client *kube.KubernetesClient, namespace stri
 		return nil, fmt.Errorf("remote not defined")
 	}
 
+	if a.cacheRefreshInterval == 0 {
+		return nil, fmt.Errorf("cache refresh interval not set")
+	}
+
 	a.kubeClient = client
 
 	// Initial state of the agent is disconnected
@@ -246,17 +258,12 @@ func NewAgent(ctx context.Context, client *kube.KubernetesClient, namespace stri
 		appNamespace = ""
 	}
 
-	appListOpts := config.AppLabelSelector(a.appLabelSelector)
-	if a.appLabelSelector != "" {
-		log().Infof("Application informer using label selector: %s", appListOpts.LabelSelector)
-	}
-
 	// appListFunc and watchFunc are anonymous functions for the informer
 	appListFunc := func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
-		return client.ApplicationsClientset.ArgoprojV1alpha1().Applications(appNamespace).List(ctx, appListOpts)
+		return client.ApplicationsClientset.ArgoprojV1alpha1().Applications(appNamespace).List(ctx, config.LabelSelector(a.labelSelector))
 	}
 	appWatchFunc := func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-		return client.ApplicationsClientset.ArgoprojV1alpha1().Applications(appNamespace).Watch(ctx, appListOpts)
+		return client.ApplicationsClientset.ArgoprojV1alpha1().Applications(appNamespace).Watch(ctx, config.LabelSelector(a.labelSelector))
 	}
 
 	appInformerOptions := []informer.InformerOption[*v1alpha1.Application]{
@@ -285,6 +292,7 @@ func NewAgent(ctx context.Context, client *kube.KubernetesClient, namespace stri
 
 	if a.options.metricsPort > 0 {
 		a.metrics = metrics.NewAgentMetrics()
+		metrics.RegisterK8sClientMetrics()
 	}
 
 	appInformer, err := informer.NewInformer(ctx, appInformerOptions...)
@@ -298,11 +306,11 @@ func NewAgent(ctx context.Context, client *kube.KubernetesClient, namespace stri
 	appManagerOpts = append(appManagerOpts, application.WithAllowUpsert(allowUpsert))
 
 	projListFunc := func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
-		return client.ApplicationsClientset.ArgoprojV1alpha1().AppProjects(a.namespace).List(ctx, config.DefaultLabelSelector())
+		return client.ApplicationsClientset.ArgoprojV1alpha1().AppProjects(a.namespace).List(ctx, config.LabelSelector(a.labelSelector))
 	}
 
 	projWatchFunc := func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-		return client.ApplicationsClientset.ArgoprojV1alpha1().AppProjects(a.namespace).Watch(ctx, config.DefaultLabelSelector())
+		return client.ApplicationsClientset.ArgoprojV1alpha1().AppProjects(a.namespace).Watch(ctx, config.LabelSelector(a.labelSelector))
 	}
 
 	projInformerOptions := []informer.InformerOption[*v1alpha1.AppProject]{
@@ -320,30 +328,33 @@ func NewAgent(ctx context.Context, client *kube.KubernetesClient, namespace stri
 		return nil, fmt.Errorf("could not instantiate project informer: %w", err)
 	}
 
+	appBackendOpts := []kubeapp.KubernetesBackendOption{
+		kubeapp.WithLabelSelector(a.labelSelector),
+	}
+	appBackend := kubeapp.NewKubernetesBackend(client.ApplicationsClientset, a.namespace, appInformer, true, appBackendOpts...)
+
 	// The agent only supports Kubernetes as application backend
-	a.appManager, err = application.NewApplicationManager(
-		kubeapp.NewKubernetesBackend(client.ApplicationsClientset, a.namespace, appInformer, true),
-		a.namespace,
-		appManagerOpts...,
-	)
+	a.appManager, err = application.NewApplicationManager(appBackend, a.namespace, appManagerOpts...)
 	if err != nil {
 		return nil, err
 	}
 
-	a.projectManager, err = appproject.NewAppProjectManager(
-		kubeappproject.NewKubernetesBackend(client.ApplicationsClientset, a.namespace, projInformer, true),
-		a.namespace,
-		appProjectManagerOption...)
+	projectBackendOpts := []kubeappproject.KubernetesBackendOption{
+		kubeappproject.WithLabelSelector(a.labelSelector),
+	}
+	projectBackend := kubeappproject.NewKubernetesBackend(client.ApplicationsClientset, a.namespace, projInformer, true, projectBackendOpts...)
+
+	a.projectManager, err = appproject.NewAppProjectManager(projectBackend, a.namespace, appProjectManagerOption...)
 	if err != nil {
 		return nil, err
 	}
 
 	repoInformerOptions := []informer.InformerOption[*corev1.Secret]{
 		informer.WithListHandler[*corev1.Secret](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
-			return client.Clientset.CoreV1().Secrets(a.namespace).List(ctx, config.DefaultLabelSelector())
+			return client.Clientset.CoreV1().Secrets(a.namespace).List(ctx, config.LabelSelector(a.labelSelector))
 		}),
 		informer.WithWatchHandler[*corev1.Secret](func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-			return client.Clientset.CoreV1().Secrets(a.namespace).Watch(ctx, config.DefaultLabelSelector())
+			return client.Clientset.CoreV1().Secrets(a.namespace).Watch(ctx, config.LabelSelector(a.labelSelector))
 		}),
 		informer.WithAddHandler[*corev1.Secret](a.handleRepositoryCreation),
 		informer.WithUpdateHandler[*corev1.Secret](a.handleRepositoryUpdate),
@@ -357,8 +368,34 @@ func NewAgent(ctx context.Context, client *kube.KubernetesClient, namespace stri
 		return nil, fmt.Errorf("could not instantiate repository informer: %w", err)
 	}
 
-	repoBackened := kuberepository.NewKubernetesBackend(client.Clientset, a.namespace, repoInformer, true)
+	repoBackendOpts := []kuberepository.KubernetesBackendOption{
+		kuberepository.WithLabelSelector(a.labelSelector),
+	}
+
+	repoBackened := kuberepository.NewKubernetesBackend(client.Clientset, a.namespace, repoInformer, true, repoBackendOpts...)
 	a.repoManager = repository.NewManager(repoBackened, a.namespace, true)
+
+	gpgKeyInformerOptions := []informer.InformerOption[*corev1.ConfigMap]{
+		informer.WithListHandler[*corev1.ConfigMap](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
+			return client.Clientset.CoreV1().ConfigMaps(a.namespace).List(ctx, config.LabelSelector(a.labelSelector))
+		}),
+		informer.WithWatchHandler[*corev1.ConfigMap](func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
+			return client.Clientset.CoreV1().ConfigMaps(a.namespace).Watch(ctx, config.LabelSelector(a.labelSelector))
+		}),
+		informer.WithAddHandler[*corev1.ConfigMap](a.handleGPGKeyCreation),
+		informer.WithUpdateHandler[*corev1.ConfigMap](a.handleGPGKeyUpdate),
+		informer.WithDeleteHandler[*corev1.ConfigMap](a.handleGPGKeyDeletion),
+		informer.WithFilters(kubegpgkey.DefaultFilterChain(a.namespace)),
+		informer.WithGroupResource[*corev1.ConfigMap]("", "configmaps"),
+	}
+
+	gpgKeyInformer, err := informer.NewInformer(ctx, gpgKeyInformerOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("could not instantiate GPG key informer: %w", err)
+	}
+
+	gpgKeyBackend := kubegpgkey.NewKubernetesBackend(client.Clientset, a.namespace, gpgKeyInformer)
+	a.gpgKeyManager = gpgkey.NewManager(gpgKeyBackend, a.namespace)
 
 	nsInformerOpts := []informer.InformerOption[*corev1.Namespace]{
 		informer.WithListHandler[*corev1.Namespace](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
@@ -394,7 +431,33 @@ func NewAgent(ctx context.Context, client *kube.KubernetesClient, namespace stri
 		connMap: map[string]connectionEntry{},
 	}
 
-	clusterCache, err := cluster.NewClusterCacheInstance(a.redisProxyMsgHandler.redisAddress, a.redisProxyMsgHandler.redisPassword, cacheutil.RedisCompressionGZip)
+	// Create TLS config for cluster cache Redis client (same as for Redis proxy)
+	var clusterCacheTLSConfig *tls.Config
+	if a.redisProxyMsgHandler.redisTLSEnabled {
+		serverName, _, err := net.SplitHostPort(a.redisProxyMsgHandler.redisAddress)
+		if err != nil {
+			serverName = a.redisProxyMsgHandler.redisAddress
+		}
+		clusterCacheTLSConfig = &tls.Config{
+			ServerName: serverName,
+		}
+		if a.redisProxyMsgHandler.redisTLSInsecure {
+			clusterCacheTLSConfig.InsecureSkipVerify = true
+			log().Warn("INSECURE: cluster cache not verifying Redis TLS certificate")
+		} else if a.redisProxyMsgHandler.redisTLSCA != nil {
+			clusterCacheTLSConfig.RootCAs = a.redisProxyMsgHandler.redisTLSCA
+		} else if a.redisProxyMsgHandler.redisTLSCAPath != "" {
+			caPool, err := tlsutil.X509CertPoolFromFile(a.redisProxyMsgHandler.redisTLSCAPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load Redis CA certificate: %w", err)
+			}
+			clusterCacheTLSConfig.RootCAs = caPool
+		} else {
+			return nil, fmt.Errorf("redis TLS enabled but no CA certificate configured for cluster cache")
+		}
+	}
+
+	clusterCache, err := cluster.NewClusterCacheInstance(a.redisProxyMsgHandler.redisAddress, a.redisProxyMsgHandler.redisPassword, cacheutil.RedisCompressionGZip, clusterCacheTLSConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cluster cache instance: %v", err)
 	}
@@ -408,6 +471,10 @@ func (a *Agent) Start(ctx context.Context) error {
 	log().Infof("Starting %s (agent) v%s (ns=%s, allowed_namespaces=%v, mode=%s, auth=%s)", a.version.Name(), a.version.Version(), a.namespace, a.options.namespaces, a.mode, a.remote.AuthMethod())
 	a.context = infCtx
 	a.cancelFn = cancelFn
+
+	if a.destinationBasedMapping {
+		log().Info("Destination-based mapping is enabled")
+	}
 
 	// For managed-agent we need to maintain a cache to keep resources in sync with last known state of
 	// principal in case agent is disconnected with principal or resources in managed-cluster are modified.
@@ -423,6 +490,10 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	a.emitter = event.NewEventSource(fmt.Sprintf("agent://%s", "agent-managed"))
+
+	if a.labelSelector != "" {
+		log().Infof("Agent informers are using the label selector: %s", a.labelSelector)
+	}
 
 	// Start the Application backend in the background
 	go func() {
@@ -477,10 +548,24 @@ func (a *Agent) Start(ctx context.Context) error {
 		}
 	}()
 
+	// Start the GPG key backend in the background
+	go func() {
+		if err := a.gpgKeyManager.StartBackend(a.context); err != nil {
+			log().WithError(err).Error("GPG key backend has exited non-successfully")
+		} else {
+			log().Info("GPG key backend has exited")
+		}
+	}()
+
 	if err = a.repoManager.EnsureSynced(waitForSyncedDuration); err != nil {
 		return fmt.Errorf("unable to sync Repository informer: %w", err)
 	}
 	log().Infof("Repository informer synced and ready")
+
+	if err = a.gpgKeyManager.EnsureSynced(waitForSyncedDuration); err != nil {
+		return fmt.Errorf("unable to sync GPG key informer: %w", err)
+	}
+	log().Infof("GPG key informer synced and ready")
 
 	if a.options.healthzPort > 0 {
 		// Endpoint to check if the agent is up and running
@@ -620,6 +705,18 @@ func (a *Agent) populateSourceCache(ctx context.Context) error {
 		sourceUID, exists := repo.Annotations[manager.SourceUIDAnnotation]
 		if exists {
 			a.sourceCache.Repository.Set(ty.UID(sourceUID), repo.Data)
+		}
+	}
+
+	log().Infof("Recreating GPG key spec cache from existing resources on cluster")
+	gpgKeyCM, err := a.gpgKeyManager.Get(ctx, common.ArgoCDGPGKeysConfigMapName, a.namespace)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	if err == nil {
+		sourceUID, exists := gpgKeyCM.Annotations[manager.SourceUIDAnnotation]
+		if exists {
+			a.sourceCache.GPGKey.Set(ty.UID(sourceUID), gpgKeyCM.Data)
 		}
 	}
 

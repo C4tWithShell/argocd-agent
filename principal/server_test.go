@@ -28,6 +28,7 @@ import (
 	"github.com/argoproj-labs/argocd-agent/internal/event"
 	"github.com/argoproj-labs/argocd-agent/internal/manager"
 	"github.com/argoproj-labs/argocd-agent/internal/manager/appproject"
+	"github.com/argoproj-labs/argocd-agent/internal/manager/gpgkey"
 	"github.com/argoproj-labs/argocd-agent/internal/manager/repository"
 	"github.com/argoproj-labs/argocd-agent/internal/queue"
 	"github.com/argoproj-labs/argocd-agent/pkg/types"
@@ -40,7 +41,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 )
 
@@ -291,6 +294,9 @@ func Test_SendCurrentStateToAgent(t *testing.T) {
 		projMgr, err := appproject.NewAppProjectManager(mockProjBackend, ns)
 		require.NoError(t, err)
 		repoMgr := repository.NewManager(mockRepoBackend, ns, false)
+		mockGPGKeyBackend := mocks.NewGPGKey(t)
+		mockGPGKeyBackend.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(nil, k8serrors.NewNotFound(schema.GroupResource{Group: "", Resource: "configmaps"}, "argocd-gpg-keys-cm")).Maybe()
+		gpgMgr := gpgkey.NewManager(mockGPGKeyBackend, ns)
 		s := &Server{
 			ctx:            context.Background(),
 			namespace:      ns,
@@ -298,6 +304,7 @@ func Test_SendCurrentStateToAgent(t *testing.T) {
 			events:         event.NewEventSource("test"),
 			projectManager: projMgr,
 			repoManager:    repoMgr,
+			gpgKeyManager:  gpgMgr,
 			repoToAgents:   NewMapToSet(),
 			projectToRepos: NewMapToSet(),
 		}
@@ -490,6 +497,104 @@ func Test_SendCurrentStateToAgent(t *testing.T) {
 		err := s.sendCurrentStateToAgent(agentName)
 		require.NoError(t, err)
 
+		sendQ := s.queues.SendQ(agentName)
+		assert.Equal(t, 2, sendQ.Len())
+	})
+
+	t.Run("skips repository when it has SkipSyncLabel=true", func(t *testing.T) {
+		proj := generateAppProject("proj1")
+		repo := generateRepoSecret("repo1", "proj1")
+		repo.Labels = map[string]string{config.SkipSyncLabel: "true"}
+
+		mockProjBackend := &mocks.AppProject{}
+		mockRepoBackend := &mocks.Repository{}
+		mockProjBackend.On("List", mock.Anything, mock.Anything).Return([]v1alpha1.AppProject{proj}, nil)
+		mockRepoBackend.On("List", mock.Anything, mock.Anything).Return([]corev1.Secret{repo}, nil)
+
+		s := newServer(t, mockProjBackend, mockRepoBackend)
+		err := s.sendCurrentStateToAgent(agentName)
+		require.NoError(t, err)
+
+		sendQ := s.queues.SendQ(agentName)
+		assert.Equal(t, 1, sendQ.Len())
+		assert.Empty(t, s.repoToAgents.Get("repo1"))
+	})
+
+	t.Run("skips repository when its project has SkipSyncLabel=true", func(t *testing.T) {
+		proj := generateAppProject("proj1")
+		proj.Labels = map[string]string{config.SkipSyncLabel: "true"}
+		repo := generateRepoSecret("repo1", "proj1")
+
+		mockProjBackend := &mocks.AppProject{}
+		mockRepoBackend := &mocks.Repository{}
+		mockProjBackend.On("List", mock.Anything, mock.Anything).Return([]v1alpha1.AppProject{proj}, nil)
+		mockRepoBackend.On("List", mock.Anything, mock.Anything).Return([]corev1.Secret{repo}, nil)
+
+		s := newServer(t, mockProjBackend, mockRepoBackend)
+		err := s.sendCurrentStateToAgent(agentName)
+		require.NoError(t, err)
+
+		sendQ := s.queues.SendQ(agentName)
+		assert.Equal(t, 0, sendQ.Len())
+		assert.Empty(t, s.projectToRepos.Get("proj1"))
+		assert.Empty(t, s.repoToAgents.Get("repo1"))
+	})
+
+	t.Run("sends GPG key ConfigMap when it exists without skip-sync label", func(t *testing.T) {
+		proj := generateAppProject("proj1")
+		repo := generateRepoSecret("repo1", "proj1")
+
+		mockProjBackend := &mocks.AppProject{}
+		mockRepoBackend := &mocks.Repository{}
+		mockProjBackend.On("List", mock.Anything, mock.Anything).Return([]v1alpha1.AppProject{proj}, nil)
+		mockRepoBackend.On("List", mock.Anything, mock.Anything).Return([]corev1.Secret{repo}, nil)
+
+		mockGPGBackend := mocks.NewGPGKey(t)
+		gpgCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      common.ArgoCDGPGKeysConfigMapName,
+				Namespace: ns,
+			},
+			Data: map[string]string{"key1": "data1"},
+		}
+		mockGPGBackend.On("Get", mock.Anything, common.ArgoCDGPGKeysConfigMapName, ns).Return(gpgCM, nil)
+
+		s := newServer(t, mockProjBackend, mockRepoBackend)
+		s.gpgKeyManager = gpgkey.NewManager(mockGPGBackend, ns)
+		err := s.sendCurrentStateToAgent(agentName)
+		require.NoError(t, err)
+
+		// 1 project + 1 repo + 1 GPG key
+		sendQ := s.queues.SendQ(agentName)
+		assert.Equal(t, 3, sendQ.Len())
+	})
+
+	t.Run("skips GPG key ConfigMap when it has SkipSyncLabel=true", func(t *testing.T) {
+		proj := generateAppProject("proj1")
+		repo := generateRepoSecret("repo1", "proj1")
+
+		mockProjBackend := &mocks.AppProject{}
+		mockRepoBackend := &mocks.Repository{}
+		mockProjBackend.On("List", mock.Anything, mock.Anything).Return([]v1alpha1.AppProject{proj}, nil)
+		mockRepoBackend.On("List", mock.Anything, mock.Anything).Return([]corev1.Secret{repo}, nil)
+
+		mockGPGBackend := mocks.NewGPGKey(t)
+		gpgCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      common.ArgoCDGPGKeysConfigMapName,
+				Namespace: ns,
+				Labels:    map[string]string{config.SkipSyncLabel: "true"},
+			},
+			Data: map[string]string{"key1": "data1"},
+		}
+		mockGPGBackend.On("Get", mock.Anything, common.ArgoCDGPGKeysConfigMapName, ns).Return(gpgCM, nil)
+
+		s := newServer(t, mockProjBackend, mockRepoBackend)
+		s.gpgKeyManager = gpgkey.NewManager(mockGPGBackend, ns)
+		err := s.sendCurrentStateToAgent(agentName)
+		require.NoError(t, err)
+
+		// 1 project + 1 repo, GPG key skipped
 		sendQ := s.queues.SendQ(agentName)
 		assert.Equal(t, 2, sendQ.Len())
 	})

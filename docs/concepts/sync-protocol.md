@@ -27,7 +27,7 @@ The protocol uses a **hub-and-spoke** architecture where:
 │   Agent 1       │──────────────────►│   Principal     │
 │  (Workload)     │                   │ (Control Plane) │
 └─────────────────┘                   └─────────────────┘
-                                              ▲
+                                             ▲
 ┌─────────────────┐                          │
 │   Agent 2       │──────────────────────────┘
 │  (Workload)     │
@@ -38,7 +38,7 @@ The protocol uses a **hub-and-spoke** architecture where:
 
 ```
 ┌─────────────────────────────────────┐
-│         Application Events          │  ← Create, Update, Delete, Status
+│         Application Events          │  ← Create, Delete, SpecUpdate, Status, etc
 ├─────────────────────────────────────┤
 │        CloudEvents Format           │  ← Event envelope with metadata
 ├─────────────────────────────────────┤
@@ -100,7 +100,6 @@ The protocol defines several event types for different synchronization scenarios
 #### Resource Management Events
 
 - **`create`**: Create new resource (managed mode only)
-- **`update`**: Update resource configuration
 - **`delete`**: Remove resource (managed mode only)
 - **`spec-update`**: Update resource specification
 - **`status-update`**: Update resource status
@@ -143,14 +142,14 @@ Principal                           Agent
     │                                │
     │  ◄─── create/update/delete ────│  (Configuration changes)
     │                                │
-    │─── status-update ─────────────► │  (Status sync)
+    │─── status-update ────────────► │  (Status sync)
     │                                │
     │─── request-synced-resource ──► │  (On principal restart)
     │     -list                      │
     │                                │
     │  ◄─── response-synced-resource │  (For each resource)
     │                                │
-    │─── request-update ────────────► │  (Request specific updates)
+    │─── request-update ───────────► │  (Request specific updates)
 ```
 
 ## Synchronization Modes

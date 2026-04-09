@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	goruntime "runtime"
@@ -29,7 +30,9 @@ import (
 	"github.com/argoproj-labs/argocd-agent/internal/auth"
 	"github.com/argoproj-labs/argocd-agent/internal/backend"
 	kubeapp "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/application"
+	kubeappset "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/applicationset"
 	kubeappproject "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/appproject"
+	kubegpgkey "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/gpgkey"
 	kubenamespace "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/namespace"
 	kuberepository "github.com/argoproj-labs/argocd-agent/internal/backend/kubernetes/repository"
 	"github.com/argoproj-labs/argocd-agent/internal/cache"
@@ -42,7 +45,9 @@ import (
 	"github.com/argoproj-labs/argocd-agent/internal/logging"
 	"github.com/argoproj-labs/argocd-agent/internal/manager"
 	"github.com/argoproj-labs/argocd-agent/internal/manager/application"
+	"github.com/argoproj-labs/argocd-agent/internal/manager/applicationset"
 	"github.com/argoproj-labs/argocd-agent/internal/manager/appproject"
+	"github.com/argoproj-labs/argocd-agent/internal/manager/gpgkey"
 	"github.com/argoproj-labs/argocd-agent/internal/manager/repository"
 	"github.com/argoproj-labs/argocd-agent/internal/metrics"
 	"github.com/argoproj-labs/argocd-agent/internal/queue"
@@ -51,7 +56,9 @@ import (
 	"github.com/argoproj-labs/argocd-agent/internal/tlsutil"
 	"github.com/argoproj-labs/argocd-agent/internal/tracing"
 	"github.com/argoproj-labs/argocd-agent/internal/version"
+	principalIdentity "github.com/argoproj-labs/argocd-agent/pkg/principal"
 	"github.com/argoproj-labs/argocd-agent/pkg/types"
+	"github.com/argoproj-labs/argocd-agent/principal/apis/eventstream"
 	logstream "github.com/argoproj-labs/argocd-agent/principal/apis/logstreamapi"
 	"github.com/argoproj-labs/argocd-agent/principal/apis/terminalstream"
 	"github.com/argoproj-labs/argocd-agent/principal/redisproxy"
@@ -65,6 +72,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stypes "k8s.io/apimachinery/pkg/types"
@@ -92,6 +100,7 @@ type Server struct {
 	ctxCancel      context.CancelFunc
 	appManager     *application.ApplicationManager
 	projectManager *appproject.AppProjectManager
+	appSetManager  *applicationset.ApplicationSetManager
 
 	namespaceManager *kubenamespace.KubernetesBackend
 
@@ -101,7 +110,8 @@ type Server struct {
 	// key: project name, value: set of repositories using the project
 	projectToRepos *MapToSet
 
-	repoManager *repository.RepositoryManager
+	repoManager   *repository.RepositoryManager
+	gpgKeyManager *gpgkey.GPGKeyManager
 	// At present, 'watchLock' is only acquired on calls to 'updateAppCallback'. This behaviour was added as a short-term attempt to preserve update event ordering. However, this is known to be problematic due to the potential for race conditions, both within itself, and between other event processors like deleteAppCallback.
 	watchLock sync.RWMutex
 	// clientMap is not currently used
@@ -156,7 +166,8 @@ type Server struct {
 	// handlers to run when an agent connects to the principal
 	handlersOnConnect []handlersOnConnect
 
-	eventWriters *event.EventWritersMap
+	eventWriters   *event.EventWritersMap
+	eventStreamSrv *eventstream.Server
 
 	// sourceCache is a cache of resources from the source. We use it to revert any changes made to the local resources.
 	sourceCache *cache.SourceCache
@@ -182,6 +193,15 @@ type Server struct {
 
 	// agentRegistrationManager handles automatic registration of agents
 	agentRegistrationManager *registration.AgentRegistrationManager
+
+	// ha holds HA components for high availability support
+	ha *HAComponents
+
+	// principalUID is a persistent identity for this principal instance,
+	// stored in a ConfigMap. Sent as a CloudEvent extension so the agent can
+	// detect principal transitions without relying on annotations that AppSet
+	// may wipe.
+	principalUID string
 }
 
 type handlersOnConnect func(agent types.Agent) error
@@ -191,6 +211,7 @@ type handlersOnConnect func(agent types.Agent) error
 var noAuthEndpoints = map[string]bool{
 	"/versionapi.Version/Version":          true,
 	"/authapi.Authentication/Authenticate": true,
+	"/authapi.Authentication/RefreshToken": true,
 }
 
 const waitForSyncedDuration = 60 * time.Second
@@ -268,18 +289,12 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 	}
 
 	appFilters := s.defaultAppFilterChain()
-
-	appListOpts := config.AppLabelSelector(s.options.appLabelSelector)
-	if s.options.appLabelSelector != "" {
-		log().Infof("Application informer using label selector: %s", appListOpts.LabelSelector)
-	}
-
 	appInformerOpts := []informer.InformerOption[*v1alpha1.Application]{
 		informer.WithListHandler[*v1alpha1.Application](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
-			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().Applications("").List(ctx, appListOpts)
+			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().Applications("").List(ctx, config.LabelSelector(s.options.labelSelector))
 		}),
 		informer.WithWatchHandler[*v1alpha1.Application](func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().Applications("").Watch(ctx, appListOpts)
+			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().Applications("").Watch(ctx, config.LabelSelector(s.options.labelSelector))
 		}),
 		informer.WithAddHandler[*v1alpha1.Application](s.newAppCallback),
 		informer.WithUpdateHandler[*v1alpha1.Application](s.updateAppCallback),
@@ -296,10 +311,10 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 
 	projInformerOpts := []informer.InformerOption[*v1alpha1.AppProject]{
 		informer.WithListHandler[*v1alpha1.AppProject](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
-			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().AppProjects(namespace).List(ctx, config.DefaultLabelSelector())
+			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().AppProjects(namespace).List(ctx, config.LabelSelector(s.options.labelSelector))
 		}),
 		informer.WithWatchHandler[*v1alpha1.AppProject](func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().AppProjects(namespace).Watch(ctx, config.DefaultLabelSelector())
+			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().AppProjects(namespace).Watch(ctx, config.LabelSelector(s.options.labelSelector))
 		}),
 		informer.WithAddHandler[*v1alpha1.AppProject](s.newAppProjectCallback),
 		informer.WithUpdateHandler[*v1alpha1.AppProject](s.updateAppProjectCallback),
@@ -315,6 +330,7 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 
 	if s.options.metricsPort > 0 {
 		s.metrics = metrics.NewPrincipalMetrics()
+		metrics.RegisterK8sClientMetrics()
 
 		appInformerOpts = append(appInformerOpts, informer.WithMetrics[*v1alpha1.Application](prometheus.NewRegistry(), metrics.NewInformerMetrics("applications")))
 		projInformerOpts = append(projInformerOpts, informer.WithMetrics[*v1alpha1.AppProject](prometheus.NewRegistry(), metrics.NewInformerMetrics("appprojects")))
@@ -332,17 +348,51 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 		return nil, err
 	}
 
-	s.appManager, err = application.NewApplicationManager(kubeapp.NewKubernetesBackend(kubeClient.ApplicationsClientset, s.namespace, appInformer, true), s.namespace,
+	appBackendOpts := []kubeapp.KubernetesBackendOption{
+		kubeapp.WithLabelSelector(s.options.labelSelector),
+	}
+	appBackend := kubeapp.NewKubernetesBackend(kubeClient.ApplicationsClientset, s.namespace, appInformer, true, appBackendOpts...)
+
+	s.appManager, err = application.NewApplicationManager(appBackend, s.namespace,
 		appManagerOpts...,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	s.projectManager, err = appproject.NewAppProjectManager(kubeappproject.NewKubernetesBackend(kubeClient.ApplicationsClientset, s.namespace, projectInformer, true), s.namespace, projManagerOpts...)
+	projectBackendOpts := []kubeappproject.KubernetesBackendOption{
+		kubeappproject.WithLabelSelector(s.options.labelSelector),
+	}
+	projectBackend := kubeappproject.NewKubernetesBackend(kubeClient.ApplicationsClientset, s.namespace, projectInformer, true, projectBackendOpts...)
+
+	s.projectManager, err = appproject.NewAppProjectManager(projectBackend, s.namespace, projManagerOpts...)
 	if err != nil {
 		return nil, err
 	}
+
+	appSetInformerOpts := []informer.InformerOption[*v1alpha1.ApplicationSet]{
+		informer.WithListHandler[*v1alpha1.ApplicationSet](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
+			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().ApplicationSets("").List(ctx, config.LabelSelector(s.options.labelSelector))
+		}),
+		informer.WithWatchHandler[*v1alpha1.ApplicationSet](func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
+			return kubeClient.ApplicationsClientset.ArgoprojV1alpha1().ApplicationSets("").Watch(ctx, config.LabelSelector(s.options.labelSelector))
+		}),
+		informer.WithAddHandler[*v1alpha1.ApplicationSet](s.newAppSetCallback),
+		informer.WithUpdateHandler[*v1alpha1.ApplicationSet](s.updateAppSetCallback),
+		informer.WithDeleteHandler[*v1alpha1.ApplicationSet](s.deleteAppSetCallback),
+		informer.WithGroupResource[*v1alpha1.ApplicationSet]("argoproj.io", "applicationsets"),
+	}
+
+	appSetInformer, err := informer.NewInformer(s.ctx, appSetInformerOpts...)
+	if err != nil {
+		return nil, err
+	}
+
+	appSetBackendOpts := []kubeappset.KubernetesBackendOption{
+		kubeappset.WithLabelSelector(s.options.labelSelector),
+	}
+	appSetBackend := kubeappset.NewKubernetesBackend(kubeClient.ApplicationsClientset, s.namespace, appSetInformer, appSetBackendOpts...)
+	s.appSetManager = applicationset.NewApplicationSetManager(appSetBackend, s.namespace)
 
 	nsInformerOpts := []informer.InformerOption[*corev1.Namespace]{
 		informer.WithListHandler[*corev1.Namespace](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
@@ -363,10 +413,10 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 
 	repoInformerOpts := []informer.InformerOption[*corev1.Secret]{
 		informer.WithListHandler[*corev1.Secret](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
-			return kubeClient.Clientset.CoreV1().Secrets(namespace).List(ctx, config.DefaultLabelSelector())
+			return kubeClient.Clientset.CoreV1().Secrets(namespace).List(ctx, config.LabelSelector(s.options.labelSelector))
 		}),
 		informer.WithWatchHandler[*corev1.Secret](func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-			return kubeClient.Clientset.CoreV1().Secrets(namespace).Watch(ctx, config.DefaultLabelSelector())
+			return kubeClient.Clientset.CoreV1().Secrets(namespace).Watch(ctx, config.LabelSelector(s.options.labelSelector))
 		}),
 		informer.WithAddHandler[*corev1.Secret](s.newRepositoryCallback),
 		informer.WithUpdateHandler[*corev1.Secret](s.updateRepositoryCallback),
@@ -380,8 +430,34 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 		return nil, err
 	}
 
-	repoBackened := kuberepository.NewKubernetesBackend(kubeClient.Clientset, namespace, repoInformer, false)
+	repoBackendOpts := []kuberepository.KubernetesBackendOption{
+		kuberepository.WithLabelSelector(s.options.labelSelector),
+	}
+
+	repoBackened := kuberepository.NewKubernetesBackend(kubeClient.Clientset, namespace, repoInformer, false, repoBackendOpts...)
 	s.repoManager = repository.NewManager(repoBackened, namespace, false)
+
+	gpgKeyInformerOpts := []informer.InformerOption[*corev1.ConfigMap]{
+		informer.WithListHandler[*corev1.ConfigMap](func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
+			return kubeClient.Clientset.CoreV1().ConfigMaps(namespace).List(ctx, config.LabelSelector(s.options.labelSelector))
+		}),
+		informer.WithWatchHandler[*corev1.ConfigMap](func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
+			return kubeClient.Clientset.CoreV1().ConfigMaps(namespace).Watch(ctx, config.LabelSelector(s.options.labelSelector))
+		}),
+		informer.WithAddHandler[*corev1.ConfigMap](s.newGPGKeyCallback),
+		informer.WithUpdateHandler[*corev1.ConfigMap](s.updateGPGKeyCallback),
+		informer.WithDeleteHandler[*corev1.ConfigMap](s.deleteGPGKeyCallback),
+		informer.WithFilters(kubegpgkey.DefaultFilterChain(namespace)),
+		informer.WithGroupResource[*corev1.ConfigMap]("", "configmaps"),
+	}
+
+	gpgKeyInformer, err := informer.NewInformer(ctx, gpgKeyInformerOpts...)
+	if err != nil {
+		return nil, err
+	}
+
+	gpgKeyBackend := kubegpgkey.NewKubernetesBackend(kubeClient.Clientset, namespace, gpgKeyInformer)
+	s.gpgKeyManager = gpgkey.NewManager(gpgKeyBackend, namespace)
 
 	s.clientMap = map[string]string{
 		`{"clientID":"argocd","mode":"autonomous"}`: "argocd",
@@ -401,6 +477,33 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 		// Only set the agent lookup function for destination-based mapping
 		if s.destinationBasedMapping {
 			s.redisProxy.SetAgentLookupFunc(s.GetAgentForApp)
+		}
+
+		// Configure Redis TLS if enabled
+		if s.options.redisTLSEnabled {
+			s.redisProxy.SetTLSEnabled(true)
+
+			// Proxy server TLS (for incoming connections from Argo CD)
+			if s.options.redisProxyServerTLSCertPath != "" && s.options.redisProxyServerTLSKeyPath != "" {
+				s.redisProxy.SetServerTLSFromPath(s.options.redisProxyServerTLSCertPath, s.options.redisProxyServerTLSKeyPath)
+			} else if s.options.redisProxyServerTLSCert != nil && s.options.redisProxyServerTLSKey != nil {
+				s.redisProxy.SetServerTLS(s.options.redisProxyServerTLSCert, s.options.redisProxyServerTLSKey)
+			}
+
+			// Apply global TLS configuration to Redis proxy server
+			s.redisProxy.SetServerTLSConfig(s.options.tlsMinVersion, s.options.tlsMaxVersion, s.options.tlsCiphers)
+
+			// Redis TLS (for connections to principal's argocd-redis)
+			if s.options.redisTLSInsecure {
+				s.redisProxy.SetUpstreamTLSInsecure(true)
+			} else if s.options.redisTLSCAPath != "" {
+				s.redisProxy.SetUpstreamTLSCAPath(s.options.redisTLSCAPath)
+			} else if s.options.redisTLSCA != nil {
+				s.redisProxy.SetUpstreamTLSCA(s.options.redisTLSCA)
+			} else {
+				// No CA specified - require explicit configuration
+				return nil, fmt.Errorf("redis TLS enabled but no CA certificate configured for Redis proxy upstream: use --redis-ca-path, --redis-ca-secret-name, or --redis-tls-insecure")
+			}
 		}
 	}
 
@@ -438,7 +541,33 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 
 	// Instantiate the cluster manager to handle Argo CD cluster secrets for
 	// agents.
-	s.clusterMgr, err = cluster.NewManager(s.ctx, s.namespace, s.options.redisAddress, s.options.redisPassword, s.options.redisCompressionType, s.kubeClient.Clientset)
+	// Create TLS config for cluster manager Redis connection
+	var clusterMgrRedisTLSConfig *tls.Config
+	if s.options.redisTLSEnabled {
+		serverName, _, err := net.SplitHostPort(s.options.redisAddress)
+		if err != nil {
+			serverName = s.options.redisAddress
+		}
+		clusterMgrRedisTLSConfig = &tls.Config{
+			ServerName: serverName,
+		}
+		if s.options.redisTLSInsecure {
+			clusterMgrRedisTLSConfig.InsecureSkipVerify = true
+			logrus.Warn("INSECURE: cluster manager not verifying Redis TLS certificate")
+		} else if s.options.redisTLSCA != nil {
+			clusterMgrRedisTLSConfig.RootCAs = s.options.redisTLSCA
+		} else if s.options.redisTLSCAPath != "" {
+			caPool, err := tlsutil.X509CertPoolFromFile(s.options.redisTLSCAPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load Redis CA certificate: %w", err)
+			}
+			clusterMgrRedisTLSConfig.RootCAs = caPool
+		} else {
+			return nil, fmt.Errorf("redis TLS enabled but no CA certificate configured for cluster manager")
+		}
+	}
+
+	s.clusterMgr, err = cluster.NewManager(s.ctx, s.namespace, s.options.redisAddress, s.options.redisPassword, s.options.redisCompressionType, s.kubeClient.Clientset, clusterMgrRedisTLSConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -456,6 +585,19 @@ func NewServer(ctx context.Context, kubeClient *kube.KubernetesClient, namespace
 		kubeClient.Clientset,
 		s.issuer,
 	)
+
+	// Initialize HA components if HA options are configured
+	if len(s.options.haOptions) > 0 {
+		s.ha, err = NewHAComponents(ctx, s, s.options.haOptions...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize HA components: %w", err)
+		}
+		// Add HA handler for agent connections
+		s.handlersOnConnect = append(s.handlersOnConnect, func(agent types.Agent) error {
+			return s.ha.OnAgentConnect(agent)
+		})
+		log().Info("HA components initialized")
+	}
 
 	return s, nil
 }
@@ -507,11 +649,34 @@ func (s *Server) Start(ctx context.Context, errch chan error) error {
 		log().Infof("Starting %s (server) v%s (allowed_namespaces=%v)", s.version.Name(), s.version.Version(), s.options.namespaces)
 	}
 
+	if s.destinationBasedMapping {
+		log().Info("Destination-based mapping is enabled on the principal")
+	}
+
+	if s.namespace == "" {
+		return fmt.Errorf("namespace is required for principal identity")
+	}
+	uid, err := principalIdentity.EnsurePrincipalUID(ctx, s.kubeClient.Clientset, s.namespace)
+	if err != nil {
+		log().WithError(err).Error("failed to load/create principal identity")
+		return err
+	}
+	s.principalUID = uid
+	log().Infof("Principal identity: %s", uid)
+
 	// We need to maintain a cache to keep resources in sync with last known state of
 	// autonomous-agent in case it is disconnected with agent or resources on the control-plane are modified.
 	if err := s.populateSourceCache(ctx); err != nil {
 		log().WithError(err).Error("failed to populate the source cache")
 		return err
+	}
+
+	// Start HA components if configured
+	if s.ha != nil {
+		if err := s.ha.StartHA(ctx); err != nil {
+			log().WithError(err).Error("failed to start HA components")
+			return err
+		}
 	}
 
 	if s.options.serveGRPC {
@@ -535,9 +700,14 @@ func (s *Server) Start(ctx context.Context, errch chan error) error {
 
 	go s.RunHandlersOnConnect(s.ctx)
 
-	err := s.StartEventProcessor(s.ctx)
-	if err != nil {
-		return nil
+	if err = s.StartEventProcessor(s.ctx); err != nil {
+		return err
+	}
+
+	s.events = event.NewEventSource(s.options.serverName)
+
+	if s.options.labelSelector != "" {
+		log().Infof("Principal informers are using the label selector: %s", s.options.labelSelector)
 	}
 
 	// The application informer lives in its own go routine
@@ -557,6 +727,17 @@ func (s *Server) Start(ctx context.Context, errch chan error) error {
 			log().Info("AppProject backend has exited")
 		}
 	}()
+
+	// ApplicationSet watches are only required when replication is enabled
+	if s.ha != nil {
+		go func() {
+			if err := s.appSetManager.StartBackend(s.ctx); err != nil {
+				log().WithError(err).Error("ApplicationSet backend has exited non-successfully")
+			} else {
+				log().Info("ApplicationSet backend has exited")
+			}
+		}()
+	}
 
 	// The namespace informer lives in its own go routine
 	go func() {
@@ -582,7 +763,14 @@ func (s *Server) Start(ctx context.Context, errch chan error) error {
 		}
 	}()
 
-	s.events = event.NewEventSource(s.options.serverName)
+	// The GPG key informer lives in its own go routine
+	go func() {
+		if err := s.gpgKeyManager.StartBackend(s.ctx); err != nil {
+			log().WithError(err).Error("GPG key informer has exited non-successfully")
+		} else {
+			log().Info("GPG key informer has exited")
+		}
+	}()
 
 	syncTimeout := s.options.informerSyncTimeout
 	if syncTimeout == 0 {
@@ -599,10 +787,22 @@ func (s *Server) Start(ctx context.Context, errch chan error) error {
 	}
 	log().Infof("AppProject informer synced and ready")
 
+	if s.ha != nil {
+		if err := s.appSetManager.EnsureSynced(syncTimeout); err != nil {
+			return fmt.Errorf("unable to sync ApplicationSet informer: %w", err)
+		}
+		log().Infof("ApplicationSet informer synced and ready")
+	}
+
 	if err := s.repoManager.EnsureSynced(syncTimeout); err != nil {
 		return fmt.Errorf("unable to sync Repository informer: %w", err)
 	}
 	log().Infof("Repository informer synced and ready")
+
+	if err := s.gpgKeyManager.EnsureSynced(syncTimeout); err != nil {
+		return fmt.Errorf("unable to sync GPG key informer: %w", err)
+	}
+	log().Infof("GPG key informer synced and ready")
 
 	// Start resource proxy if it is enabled
 	if s.resourceProxy != nil {
@@ -625,7 +825,12 @@ func (s *Server) Start(ctx context.Context, errch chan error) error {
 
 	if s.options.healthzPort > 0 {
 		// Endpoint to check if the principal is up and running
-		http.HandleFunc("/healthz", s.healthzHandler)
+		// Wrap with HA handler if HA is configured
+		healthzHandler := s.healthzHandler
+		if s.ha != nil {
+			healthzHandler = s.ha.HAHealthzHandler(s.healthzHandler)
+		}
+		http.HandleFunc("/healthz", healthzHandler)
 		healthzAddr := fmt.Sprintf(":%d", s.options.healthzPort)
 
 		log().Infof("Starting healthz server on %s", healthzAddr)
@@ -735,7 +940,8 @@ func (s *Server) handleResyncOnConnect(agent types.Agent) error {
 		}
 
 		resyncHandler := resync.NewRequestHandler(dynClient, sendQ, s.events, s.resources.Get(agent.Name()), logCtx, manager.ManagerRolePrincipal, s.namespace).
-			WithDestinationBasedMapping(s.destinationBasedMapping)
+			WithDestinationBasedMapping(s.destinationBasedMapping).
+			WithPrincipalUID(s.principalUID)
 		go resyncHandler.SendRequestUpdates(s.ctx)
 
 		// Principal should request SyncedResourceList to revert any deletions on the Principal side.
@@ -804,10 +1010,8 @@ func (s *Server) sendCurrentStateToAgent(agent string) error {
 		}
 
 		// Don't send AppProjects that have SkipSyncLabel=true
-		if appProject.Labels != nil {
-			if val, ok := appProject.Labels[config.SkipSyncLabel]; ok && val == "true" {
-				continue
-			}
+		if hasSkipSyncLabel(appProject.Labels) {
+			continue
 		}
 
 		agentAppProject := appproject.AgentSpecificAppProject(appProject, agent, s.destinationBasedMapping)
@@ -842,6 +1046,10 @@ func (s *Server) sendCurrentStateToAgent(agent string) error {
 			continue
 		}
 
+		if hasSkipSyncLabel(repository.Labels) || hasSkipSyncLabel(project.Labels) {
+			continue
+		}
+
 		if !appproject.DoesAgentMatchWithProject(agent, project) {
 			continue
 		}
@@ -855,13 +1063,45 @@ func (s *Server) sendCurrentStateToAgent(agent string) error {
 		sendQ.Add(ev)
 	}
 
+	// Send GPG keys ConfigMap to the agent (for managed agents only)
+	gpgKeyCM, err := s.gpgKeyManager.Get(s.ctx, common.ArgoCDGPGKeysConfigMapName, s.namespace)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to get GPG key ConfigMap: %w", err)
+		}
+	} else if !hasSkipSyncLabel(gpgKeyCM.Labels) {
+		ev := s.events.GPGKeyEvent(event.SpecUpdate, gpgKeyCM)
+		tracing.PopulateSpanFromObject(span, gpgKeyCM)
+		tracing.InjectTraceContext(ctx, ev)
+		sendQ.Add(ev)
+	}
+
 	return nil
+}
+
+func hasSkipSyncLabel(labels map[string]string) bool {
+	if labels == nil {
+		return false
+	}
+
+	if v, found := labels[config.SkipSyncLabel]; found && v == "true" {
+		return true
+	}
+	return false
 }
 
 // Shutdown shuts down the server s. If no server is running, or shutting down
 // results in an error, an error is returned.
 func (s *Server) Shutdown() error {
 	var err error
+
+	// Shutdown HA components first
+	if s.ha != nil {
+		if err = s.ha.ShutdownHA(s.ctx); err != nil {
+			log().WithError(err).Warn("HA shutdown encountered errors")
+			// Continue with shutdown even if HA shutdown has errors
+		}
+	}
 
 	if s.resourceProxy != nil {
 		if err = s.resourceProxy.Stop(s.ctx); err != nil {
@@ -1074,4 +1314,40 @@ func (s *Server) populateSourceCache(ctx context.Context) error {
 
 	log().Infof("Source cache populated successfully")
 	return nil
+}
+
+// HAComponents returns the HA components, or nil if HA is not configured
+func (s *Server) HAComponents() *HAComponents {
+	return s.ha
+}
+
+// IsActive returns true if this principal is currently active (or if HA is not configured)
+func (s *Server) IsActive() bool {
+	if s.ha == nil {
+		return true
+	}
+	return s.ha.IsActive()
+}
+
+// ShouldAcceptAgents returns true if this principal should accept agent connections
+func (s *Server) ShouldAcceptAgents() bool {
+	if s.ha == nil {
+		return true
+	}
+	return s.ha.ShouldAcceptAgents()
+}
+
+// GetHAStatus returns the current HA status, or nil if HA is not configured
+func (s *Server) GetHAStatus() *HAStatus {
+	if s.ha == nil {
+		return nil
+	}
+	return s.ha.GetHAStatus()
+}
+
+func (s *Server) isAgentConnected(agentName string) bool {
+	if s.eventStreamSrv == nil {
+		return false
+	}
+	return s.eventStreamSrv.IsAgentConnected(agentName)
 }

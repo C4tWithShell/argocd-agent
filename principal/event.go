@@ -28,6 +28,7 @@ import (
 	"github.com/argoproj-labs/argocd-agent/internal/namedlock"
 	"github.com/argoproj-labs/argocd-agent/internal/resync"
 	"github.com/argoproj-labs/argocd-agent/internal/tracing"
+	"github.com/argoproj-labs/argocd-agent/pkg/replication"
 	"github.com/argoproj-labs/argocd-agent/pkg/types"
 	"github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -41,6 +42,18 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/workqueue"
 )
+
+// skipReplication returns true for event targets that are operational noise and
+// should not be forwarded to HA replicas. Replicas get fresh data from agents
+// on promotion.
+func skipReplication(target event.EventTarget) bool {
+	switch target {
+	case event.TargetHeartbeat, event.TargetClusterCacheInfoUpdate:
+		return true
+	default:
+		return false
+	}
+}
 
 // processRecvQueue processes an entry from the receiver queue, which holds the
 // events received by agents. It will trigger updates of resources in the
@@ -123,6 +136,12 @@ func (s *Server) processRecvQueue(ctx context.Context, agentName string, q workq
 
 	// Mark event as processed
 	q.Done(ev)
+
+	// Forward successfully processed events to replicas, skipping operational
+	// noise that replicas don't need. Replicas get fresh data from agents on promotion.
+	if err == nil && s.ha != nil && !skipReplication(target) {
+		s.ha.ForwardEventForReplication(event.New(ev, target), agentName, replication.DirectionInbound)
+	}
 
 	// Stop and log checkpoint information
 	cp.End()
@@ -464,7 +483,7 @@ func (s *Server) processClusterCacheInfoUpdateEvent(agentName string, ev *cloude
 		"event":       ev.Type(),
 		"resource_id": event.ResourceID(ev),
 		"event_id":    event.EventID(ev),
-	}).Infof("Processing clusterCacheInfoUpdate event")
+	}).Debug("Processing clusterCacheInfoUpdate event")
 
 	return s.clusterMgr.SetClusterCacheStats(clusterInfo, agentName)
 }
@@ -640,7 +659,8 @@ func (s *Server) processIncomingResourceResyncEvent(ctx context.Context, agentNa
 	}
 
 	resyncHandler := resync.NewRequestHandler(dynClient, sendQ, s.events, s.resources.Get(agentName), logCtx, manager.ManagerRolePrincipal, s.namespace).
-		WithDestinationBasedMapping(s.destinationBasedMapping)
+		WithDestinationBasedMapping(s.destinationBasedMapping).
+		WithPrincipalUID(s.principalUID)
 
 	switch ev.Type() {
 	case event.SyncedResourceList.String():
@@ -714,20 +734,20 @@ func (s *Server) processIncomingResourceResyncEvent(ctx context.Context, agentNa
 func (s *Server) eventProcessor(ctx context.Context) error {
 	sem := semaphore.NewWeighted(s.options.eventProcessors)
 	queueLock := namedlock.NewNamedLock()
-	logCtx := s.logGrpcEvent().WithField("module", "EventProcessor")
+	baseLogCtx := s.logGrpcEvent().WithField("module", "EventProcessor")
 	for {
 		queuesProcessed := 0
 		for _, queueName := range s.queues.Names() {
 			select {
 			case <-ctx.Done():
-				logCtx.Infof("Shutting down event processor")
+				baseLogCtx.Infof("Shutting down event processor")
 				return nil
 			default:
 				// Though unlikely, the agent might have disconnected, and
 				// the queue will be gone. In this case, we'll just skip.
 				q := s.queues.RecvQ(queueName)
 				if q == nil {
-					logCtx.Debugf("Queue disappeared -- client probably has disconnected")
+					baseLogCtx.WithField("queueName", queueName).Debugf("Queue disappeared -- client probably has disconnected")
 					break
 				}
 
@@ -748,22 +768,22 @@ func (s *Server) eventProcessor(ctx context.Context) error {
 					break
 				}
 
-				logCtx = logCtx.WithField("queueName", queueName)
+				queueLogCtx := baseLogCtx.WithField("queueName", queueName)
 
 				queuesProcessed += 1
 
-				logCtx.Trace("Acquired queue lock")
+				queueLogCtx.Trace("Acquired queue lock")
 
 				err := sem.Acquire(ctx, 1)
 				if err != nil {
-					logCtx.Tracef("Error acquiring semaphore: %v", err)
+					queueLogCtx.Tracef("Error acquiring semaphore: %v", err)
 					queueLock.Unlock(queueName)
 					break
 				}
 
-				logCtx.Trace("Acquired semaphore")
+				queueLogCtx.Trace("Acquired semaphore")
 
-				go func(agentName string, q workqueue.TypedRateLimitingInterface[*cloudevents.Event]) {
+				go func(agentName string, q workqueue.TypedRateLimitingInterface[*cloudevents.Event], logCtx *logrus.Entry) {
 					defer func() {
 						sem.Release(1)
 						queueLock.Unlock(agentName)
@@ -780,7 +800,7 @@ func (s *Server) eventProcessor(ctx context.Context) error {
 					}
 
 					// Send an ACK if the event is processed successfully.
-					sendQ := s.queues.SendQ(queueName)
+					sendQ := s.queues.SendQ(agentName)
 					if sendQ == nil {
 						logCtx.Debugf("Queue disappeared -- client probably has disconnected")
 						return
@@ -793,7 +813,7 @@ func (s *Server) eventProcessor(ctx context.Context) error {
 
 					logCtx.Trace("sending an ACK for an event")
 					sendQ.Add(s.events.ProcessedEvent(event.EventProcessed, event.New(ev, event.TargetEventAck)))
-				}(queueName, q)
+				}(queueName, q, queueLogCtx)
 			}
 		}
 		// Give the CPU a little rest when no agents are connected

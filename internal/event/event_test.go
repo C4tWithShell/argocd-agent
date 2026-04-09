@@ -18,9 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ktypes "k8s.io/apimachinery/pkg/types"
 )
 
 func TestResourceRequest_IsEmpty(t *testing.T) {
@@ -526,6 +528,46 @@ func TestSentAt(t *testing.T) {
 	})
 }
 
+func TestApplicationSetEventRoundtrip(t *testing.T) {
+	es := NewEventSource("test-source")
+	appSet := &v1alpha1.ApplicationSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-appset",
+			Namespace: "argocd",
+			UID:       ktypes.UID("test-uid-123"),
+		},
+		Spec: v1alpha1.ApplicationSetSpec{
+			Generators: []v1alpha1.ApplicationSetGenerator{},
+		},
+	}
+
+	t.Run("Create event roundtrip", func(t *testing.T) {
+		cev := es.ApplicationSetEvent(Create, appSet)
+		require.NotNil(t, cev)
+		require.Equal(t, Create.String(), cev.Type())
+		require.Equal(t, TargetApplicationSet.String(), cev.DataSchema())
+
+		wrapped := New(cev, TargetApplicationSet)
+		require.Equal(t, TargetApplicationSet, wrapped.Target())
+
+		decoded, err := wrapped.ApplicationSet()
+		require.NoError(t, err)
+		require.Equal(t, "my-appset", decoded.Name)
+		require.Equal(t, "argocd", decoded.Namespace)
+	})
+
+	t.Run("Delete event roundtrip", func(t *testing.T) {
+		cev := es.ApplicationSetEvent(Delete, appSet)
+		require.NotNil(t, cev)
+		require.Equal(t, Delete.String(), cev.Type())
+
+		wrapped := New(cev, TargetApplicationSet)
+		decoded, err := wrapped.ApplicationSet()
+		require.NoError(t, err)
+		require.Equal(t, appSet.Name, decoded.Name)
+	})
+}
+
 func TestContainerTerminalRequestFields(t *testing.T) {
 	t.Run("all fields are serializable", func(t *testing.T) {
 		req := ContainerTerminalRequest{
@@ -550,5 +592,26 @@ func TestContainerTerminalRequestFields(t *testing.T) {
 		require.True(t, req.Stdin)
 		require.True(t, req.Stdout)
 		require.True(t, req.Stderr)
+	})
+}
+
+func TestSetPrincipalUID(t *testing.T) {
+	ev := cloudevents.NewEvent()
+	SetPrincipalUID(&ev, "test-uid-123")
+	val, ok := ev.Extensions()[principalUID].(string)
+	require.True(t, ok)
+	require.Equal(t, "test-uid-123", val)
+}
+
+func TestPrincipalUID(t *testing.T) {
+	t.Run("returns uid that was set", func(t *testing.T) {
+		ev := cloudevents.NewEvent()
+		SetPrincipalUID(&ev, "abc-def")
+		require.Equal(t, "abc-def", PrincipalUID(&ev))
+	})
+
+	t.Run("returns empty when not set", func(t *testing.T) {
+		ev := cloudevents.NewEvent()
+		require.Equal(t, "", PrincipalUID(&ev))
 	})
 }
