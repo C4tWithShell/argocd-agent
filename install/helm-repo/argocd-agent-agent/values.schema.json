@@ -802,6 +802,8 @@
     "allowedNamespaces",
     "destinationBasedMapping",
     "createNamespace",
+    "labelSelector",
+    "redisTLS",
     "service",
     "serviceMonitor",
     "tests"
