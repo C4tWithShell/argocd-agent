@@ -110,6 +110,9 @@ serverPort: "443"
 metricsPort: "8181"
 # -- Whether to skip TLS verification for client connections.
 tlsClientInSecure: "false"
+# -- Connect to the principal without TLS. Only use when running behind a
+# service mesh (e.g., Istio) that handles mTLS at the sidecar level.
+tlsInsecurePlaintext: "false"
 # -- Healthz server port exposed by the agent.
 healthzPort: "8002"
 # -- Redis address used by the agent.

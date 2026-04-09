@@ -243,6 +243,12 @@ spec:
                 name: {{ include "argocd-agent-agent.paramsConfigMapName" . }}
                 key: agent.label-selector
                 optional: true
+          - name: ARGOCD_AGENT_INSECURE_PLAINTEXT
+            valueFrom:
+              configMapKeyRef:
+                name: {{ include "argocd-agent-agent.paramsConfigMapName" . }}
+                key: agent.tls.insecure-plaintext
+                optional: true
           ports:
             - name: metrics
               containerPort: {{ .Values.metricsPort }}
@@ -288,6 +294,11 @@ spec:
             - name: userpass-passwd
               mountPath: /app/config/creds
               readOnly: true
+            {{- if .Values.redisTLS.secretName }}
+            - name: redis-tls-ca
+              mountPath: /app/config/redis-tls
+              readOnly: true
+            {{- end }}
       volumes:
         - name: userpass-passwd
           secret:
@@ -296,6 +307,15 @@ spec:
               - key: credentials
                 path: userpass.creds
             optional: true
+        {{- if .Values.redisTLS.secretName }}
+        - name: redis-tls-ca
+          secret:
+            secretName: {{ .Values.redisTLS.secretName }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+            optional: true
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

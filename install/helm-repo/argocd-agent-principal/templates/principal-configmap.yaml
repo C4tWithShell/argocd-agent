@@ -45,3 +45,12 @@ data:
   principal.keep-alive.min-interval: {{ .Values.params.keepAliveMinInterval | quote }}
   principal.pprof.port: {{ .Values.params.pprofPort | quote }}
   principal.destination-based-mapping: {{ .Values.params.destinationBasedMapping | quote }}
+  principal.label-selector: {{ .Values.params.labelSelector | quote }}
+  principal.event-processors: {{ .Values.params.eventProcessors | quote }}
+  principal.redis.tls.enabled: {{ .Values.params.redis.tls.enabled | quote }}
+  principal.redis.proxy.server.tls.cert-path: {{ .Values.params.redis.proxyServerTls.certPath | quote }}
+  principal.redis.proxy.server.tls.key-path: {{ .Values.params.redis.proxyServerTls.keyPath | quote }}
+  principal.redis.proxy.server.tls.secret-name: {{ .Values.params.redis.proxyServerTls.secretName | quote }}
+  principal.redis.ca-path: {{ .Values.params.redis.caPath | quote }}
+  principal.redis.ca-secret-name: {{ .Values.params.redis.caSecretName | quote }}
+  principal.redis.tls.insecure: {{ .Values.params.redis.tls.insecure | quote }}

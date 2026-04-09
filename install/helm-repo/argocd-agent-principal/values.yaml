@@ -219,6 +219,22 @@ params:
     serverAddress: "argocd-redis:6379"
     # -- Compression type for Redis connection
     compressionType: "gzip"
+    tls:
+      # -- Enable TLS for Redis connections
+      enabled: "false"
+      # -- Skip verification of Redis TLS certificate (INSECURE - for development only)
+      insecure: "false"
+    proxyServerTls:
+      # -- Path to TLS certificate for Redis proxy server
+      certPath: "/app/config/redis-proxy-server-tls/tls.crt"
+      # -- Path to TLS private key for Redis proxy server
+      keyPath: "/app/config/redis-proxy-server-tls/tls.key"
+      # -- Secret name containing TLS certificate and key for Redis proxy server
+      secretName: "argocd-redis-proxy-tls"
+    # -- Path to CA certificate for verifying Redis TLS certificate
+    caPath: "/app/config/redis-tls/ca.crt"
+    # -- Secret name containing CA certificate for verifying Redis TLS certificate
+    caSecretName: "argocd-redis-tls"
 
   # -- Enable WebSocket for streaming events to agents
   websocketEnable: "false"
@@ -231,6 +247,13 @@ params:
 
   # -- Use destination-based mapping (route apps to agents via spec.destination.name)
   destinationBasedMapping: "false"
+
+  # -- Kubernetes label selector to restrict which resources the principal watches.
+  # Used in hybrid architectures where a traditional app-controller coexists with the principal.
+  labelSelector: ""
+
+  # -- Number of concurrent event processors
+  eventProcessors: "10"
 
 ## @section Redis password secret reference
 redis:
@@ -333,6 +356,13 @@ serviceMonitor:
   scheme: ""
   # -- Prometheus ServiceMonitor tlsConfig
   tlsConfig: {}
+
+## @section NetworkPolicy
+networkPolicy:
+  # -- Whether to create a NetworkPolicy for the principal
+  enabled: false
+  # -- Namespace label value for monitoring namespace (used for metrics/healthz ingress)
+  monitoringNamespace: "monitoring"
 
 ## @section  Pod Disruption Budget
 podDisruptionBudget:

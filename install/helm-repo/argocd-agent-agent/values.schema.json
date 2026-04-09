@@ -701,6 +701,12 @@
       "title": "tlsClientInSecure",
       "type": "string"
     },
+    "tlsInsecurePlaintext": {
+      "default": "false",
+      "description": "Connect to the principal without TLS. Only use when running behind a service mesh (e.g., Istio) that handles mTLS at the sidecar level.",
+      "title": "tlsInsecurePlaintext",
+      "type": "string"
+    },
     "tlsClientKeyPath": {
       "default": "",
       "description": "Path to the TLS client key.",

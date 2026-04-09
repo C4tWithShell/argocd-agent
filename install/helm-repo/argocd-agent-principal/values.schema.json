@@ -344,7 +344,7 @@
           "type": "string"
         },
         "redis": {
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "compressionType": {
               "default": "gzip",
@@ -356,6 +356,64 @@
               "default": "argocd-redis:6379",
               "description": "Redis server address",
               "title": "serverAddress",
+              "type": "string"
+            },
+            "tls": {
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "default": "false",
+                  "description": "Enable TLS for Redis connections",
+                  "title": "enabled",
+                  "type": "string"
+                },
+                "insecure": {
+                  "default": "false",
+                  "description": "Skip verification of Redis TLS certificate (INSECURE)",
+                  "title": "insecure",
+                  "type": "string"
+                }
+              },
+              "required": ["enabled", "insecure"],
+              "title": "tls",
+              "type": "object"
+            },
+            "proxyServerTls": {
+              "additionalProperties": false,
+              "properties": {
+                "certPath": {
+                  "default": "/app/config/redis-proxy-server-tls/tls.crt",
+                  "description": "Path to TLS certificate for Redis proxy server",
+                  "title": "certPath",
+                  "type": "string"
+                },
+                "keyPath": {
+                  "default": "/app/config/redis-proxy-server-tls/tls.key",
+                  "description": "Path to TLS private key for Redis proxy server",
+                  "title": "keyPath",
+                  "type": "string"
+                },
+                "secretName": {
+                  "default": "argocd-redis-proxy-tls",
+                  "description": "Secret name containing TLS certificate and key for Redis proxy server",
+                  "title": "secretName",
+                  "type": "string"
+                }
+              },
+              "required": ["certPath", "keyPath", "secretName"],
+              "title": "proxyServerTls",
+              "type": "object"
+            },
+            "caPath": {
+              "default": "/app/config/redis-tls/ca.crt",
+              "description": "Path to CA certificate for verifying Redis TLS certificate",
+              "title": "caPath",
+              "type": "string"
+            },
+            "caSecretName": {
+              "default": "argocd-redis-tls",
+              "description": "Secret name containing CA certificate for verifying Redis TLS certificate",
+              "title": "caSecretName",
               "type": "string"
             }
           },
@@ -515,6 +573,18 @@
           "description": "Enable WebSocket for streaming events to agents",
           "title": "websocketEnable",
           "type": "string"
+        },
+        "labelSelector": {
+          "default": "",
+          "description": "Kubernetes label selector to restrict which resources the principal watches",
+          "title": "labelSelector",
+          "type": "string"
+        },
+        "eventProcessors": {
+          "default": "10",
+          "description": "Number of concurrent event processors",
+          "title": "eventProcessors",
+          "type": "string"
         }
       },
       "required": [
@@ -545,6 +615,27 @@
       "description": "Annotations for the Pod",
       "required": [],
       "title": "podAnnotations",
+      "type": "object"
+    },
+    "networkPolicy": {
+      "additionalProperties": false,
+      "description": "NetworkPolicy configuration for the principal",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Whether to create a NetworkPolicy for the principal",
+          "title": "enabled",
+          "type": "boolean"
+        },
+        "monitoringNamespace": {
+          "default": "monitoring",
+          "description": "Namespace label value for monitoring namespace",
+          "title": "monitoringNamespace",
+          "type": "string"
+        }
+      },
+      "required": ["enabled", "monitoringNamespace"],
+      "title": "networkPolicy",
       "type": "object"
     },
     "podDisruptionBudget": {
