@@ -44,15 +44,19 @@ Kubernetes: `>=1.24.0-0`
 | ingress.tls | list | `[]` |  |
 | nameOverride | string | `""` | Override the chart name |
 | namespaceOverride | string | `""` | Override namespace to deploy the agent into. Leave empty to use the release namespace. |
+| networkPolicy.enabled | bool | `false` | Whether to create a NetworkPolicy for the principal |
+| networkPolicy.monitoringNamespace | string | `"monitoring"` | Namespace label value for monitoring namespace (used for metrics/healthz ingress) |
 | nodeSelector | object | `{}` | Node selector for scheduling the agent Pod. |
 | params.allowedNamespaces | string | `""` | Comma-separated list of namespaces to watch (supports shell-style wildcards) |
 | params.auth | string | `"mtls:CN=([^,]+)"` | Authentication method. Format: <method>:<config> Examples:   "mtls:CN=([^,]+)"   "userpass:/app/config/userpass/passwd"   "header:x-forwarded-client-cert:^.*URI=spiffe://[^/]+/ns/[^/]+/sa/([^,;]+)" |
 | params.destinationBasedMapping | string | `"false"` | Use destination-based mapping (route apps to agents via spec.destination.name) |
+| params.eventProcessors | string | `"10"` | Number of concurrent event processors |
 | params.healthzPort | string | `"8003"` | Health check server port |
 | params.jwt.allowGenerate | string | `"false"` | Allow the principal to auto-generate JWT signing key (dev only) |
 | params.jwt.keyPath | string | `""` | Path to the JWT signing key (overrides secretName if set) |
 | params.jwt.secretName | string | `"argocd-agent-jwt"` | Name of the secret containing the JWT signing key |
 | params.keepAliveMinInterval | string | `"0"` | Drop agent connections that send keepalive pings more often than this interval |
+| params.labelSelector | string | `""` | Kubernetes label selector to restrict which resources the principal watches. Used in hybrid architectures where a traditional app-controller coexists with the principal. |
 | params.listenHost | string | `""` | Interface address to listen on. Empty = all interfaces. |
 | params.listenPort | string | `"8443"` | gRPC server listen port |
 | params.logFormat | string | `"text"` | Log format: text or json |
@@ -63,8 +67,15 @@ Kubernetes: `>=1.24.0-0`
 | params.namespaceCreate.labels | string | `""` | Labels to apply to created namespaces (comma-separated key=value pairs) |
 | params.namespaceCreate.pattern | string | `""` | Regexp to restrict names of created namespaces |
 | params.pprofPort | string | `"0"` | Port for pprof server (0 = disabled) |
+| params.redis.caPath | string | `"/app/config/redis-tls/ca.crt"` | Path to CA certificate for verifying Redis TLS certificate |
+| params.redis.caSecretName | string | `"argocd-redis-tls"` | Secret name containing CA certificate for verifying Redis TLS certificate |
 | params.redis.compressionType | string | `"gzip"` | Compression type for Redis connection |
+| params.redis.proxyServerTls.certPath | string | `"/app/config/redis-proxy-server-tls/tls.crt"` | Path to TLS certificate for Redis proxy server |
+| params.redis.proxyServerTls.keyPath | string | `"/app/config/redis-proxy-server-tls/tls.key"` | Path to TLS private key for Redis proxy server |
+| params.redis.proxyServerTls.secretName | string | `"argocd-redis-proxy-tls"` | Secret name containing TLS certificate and key for Redis proxy server |
 | params.redis.serverAddress | string | `"argocd-redis:6379"` | Redis server address |
+| params.redis.tls.enabled | string | `"false"` | Enable TLS for Redis connections |
+| params.redis.tls.insecure | string | `"false"` | Skip verification of Redis TLS certificate (INSECURE - for development only) |
 | params.resourceProxy.caPath | string | `""` | Path to the resource proxy CA cert |
 | params.resourceProxy.caSecretName | string | `"argocd-agent-ca"` | Name of the secret containing the resource proxy CA cert |
 | params.resourceProxy.enable | string | `"true"` | Enable the resource proxy |

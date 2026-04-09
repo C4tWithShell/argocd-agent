@@ -200,6 +200,30 @@
       "title": "namespaceOverride",
       "type": "string"
     },
+    "networkPolicy": {
+      "additionalProperties": false,
+      "description": "#",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Whether to create a NetworkPolicy for the principal",
+          "title": "enabled",
+          "type": "boolean"
+        },
+        "monitoringNamespace": {
+          "default": "monitoring",
+          "description": "Namespace label value for monitoring namespace (used for metrics/healthz ingress)",
+          "title": "monitoringNamespace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled",
+        "monitoringNamespace"
+      ],
+      "title": "networkPolicy",
+      "type": "object"
+    },
     "nodeSelector": {
       "additionalProperties": true,
       "description": "#\nNode selector for scheduling the agent Pod.",
@@ -227,6 +251,12 @@
           "default": "false",
           "description": "Use destination-based mapping (route apps to agents via spec.destination.name)",
           "title": "destinationBasedMapping",
+          "type": "string"
+        },
+        "eventProcessors": {
+          "default": "10",
+          "description": "Number of concurrent event processors",
+          "title": "eventProcessors",
           "type": "string"
         },
         "healthzPort": {
@@ -269,6 +299,12 @@
           "default": "0",
           "description": "Drop agent connections that send keepalive pings more often than this interval",
           "title": "keepAliveMinInterval",
+          "type": "string"
+        },
+        "labelSelector": {
+          "default": "",
+          "description": "Kubernetes label selector to restrict which resources the principal watches.\nUsed in hybrid architectures where a traditional app-controller coexists with the principal.",
+          "title": "labelSelector",
           "type": "string"
         },
         "listenHost": {
@@ -346,37 +382,23 @@
         "redis": {
           "additionalProperties": true,
           "properties": {
+            "caPath": {
+              "default": "/app/config/redis-tls/ca.crt",
+              "description": "Path to CA certificate for verifying Redis TLS certificate",
+              "title": "caPath",
+              "type": "string"
+            },
+            "caSecretName": {
+              "default": "argocd-redis-tls",
+              "description": "Secret name containing CA certificate for verifying Redis TLS certificate",
+              "title": "caSecretName",
+              "type": "string"
+            },
             "compressionType": {
               "default": "gzip",
               "description": "Compression type for Redis connection",
               "title": "compressionType",
               "type": "string"
-            },
-            "serverAddress": {
-              "default": "argocd-redis:6379",
-              "description": "Redis server address",
-              "title": "serverAddress",
-              "type": "string"
-            },
-            "tls": {
-              "additionalProperties": false,
-              "properties": {
-                "enabled": {
-                  "default": "false",
-                  "description": "Enable TLS for Redis connections",
-                  "title": "enabled",
-                  "type": "string"
-                },
-                "insecure": {
-                  "default": "false",
-                  "description": "Skip verification of Redis TLS certificate (INSECURE)",
-                  "title": "insecure",
-                  "type": "string"
-                }
-              },
-              "required": ["enabled", "insecure"],
-              "title": "tls",
-              "type": "object"
             },
             "proxyServerTls": {
               "additionalProperties": false,
@@ -400,26 +422,51 @@
                   "type": "string"
                 }
               },
-              "required": ["certPath", "keyPath", "secretName"],
+              "required": [
+                "certPath",
+                "keyPath",
+                "secretName"
+              ],
               "title": "proxyServerTls",
               "type": "object"
             },
-            "caPath": {
-              "default": "/app/config/redis-tls/ca.crt",
-              "description": "Path to CA certificate for verifying Redis TLS certificate",
-              "title": "caPath",
+            "serverAddress": {
+              "default": "argocd-redis:6379",
+              "description": "Redis server address",
+              "title": "serverAddress",
               "type": "string"
             },
-            "caSecretName": {
-              "default": "argocd-redis-tls",
-              "description": "Secret name containing CA certificate for verifying Redis TLS certificate",
-              "title": "caSecretName",
-              "type": "string"
+            "tls": {
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "default": "false",
+                  "description": "Enable TLS for Redis connections",
+                  "title": "enabled",
+                  "type": "string"
+                },
+                "insecure": {
+                  "default": "false",
+                  "description": "Skip verification of Redis TLS certificate (INSECURE - for development only)",
+                  "title": "insecure",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "enabled",
+                "insecure"
+              ],
+              "title": "tls",
+              "type": "object"
             }
           },
           "required": [
             "serverAddress",
-            "compressionType"
+            "compressionType",
+            "tls",
+            "proxyServerTls",
+            "caPath",
+            "caSecretName"
           ],
           "title": "redis",
           "type": "object"
@@ -573,18 +620,6 @@
           "description": "Enable WebSocket for streaming events to agents",
           "title": "websocketEnable",
           "type": "string"
-        },
-        "labelSelector": {
-          "default": "",
-          "description": "Kubernetes label selector to restrict which resources the principal watches",
-          "title": "labelSelector",
-          "type": "string"
-        },
-        "eventProcessors": {
-          "default": "10",
-          "description": "Number of concurrent event processors",
-          "title": "eventProcessors",
-          "type": "string"
         }
       },
       "required": [
@@ -605,7 +640,9 @@
         "websocketEnable",
         "keepAliveMinInterval",
         "pprofPort",
-        "destinationBasedMapping"
+        "destinationBasedMapping",
+        "labelSelector",
+        "eventProcessors"
       ],
       "title": "params",
       "type": "object"
@@ -615,27 +652,6 @@
       "description": "Annotations for the Pod",
       "required": [],
       "title": "podAnnotations",
-      "type": "object"
-    },
-    "networkPolicy": {
-      "additionalProperties": false,
-      "description": "NetworkPolicy configuration for the principal",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "description": "Whether to create a NetworkPolicy for the principal",
-          "title": "enabled",
-          "type": "boolean"
-        },
-        "monitoringNamespace": {
-          "default": "monitoring",
-          "description": "Namespace label value for monitoring namespace",
-          "title": "monitoringNamespace",
-          "type": "string"
-        }
-      },
-      "required": ["enabled", "monitoringNamespace"],
-      "title": "networkPolicy",
       "type": "object"
     },
     "podDisruptionBudget": {
@@ -1477,6 +1493,7 @@
     "service",
     "ingress",
     "serviceMonitor",
+    "networkPolicy",
     "podDisruptionBudget"
   ],
   "type": "object"
