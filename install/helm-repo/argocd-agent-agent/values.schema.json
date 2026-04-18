@@ -98,7 +98,7 @@
       "description": "#",
       "properties": {
         "pullPolicy": {
-          "default": "Always",
+          "default": "IfNotPresent",
           "description": "Image pull policy for the agent container.",
           "title": "pullPolicy",
           "type": "string"
@@ -110,8 +110,8 @@
           "type": "string"
         },
         "tag": {
-          "default": "latest",
-          "description": "Container image tag for the agent.",
+          "default": "",
+          "description": "Overrides the image tag whose default is the chart appVersion.",
           "title": "tag",
           "type": "string"
         }
@@ -711,6 +711,12 @@
       "default": "",
       "description": "Path to the TLS client key.",
       "title": "tlsClientKeyPath",
+      "type": "string"
+    },
+    "tlsInsecurePlaintext": {
+      "default": "false",
+      "description": "Whether to connect to the principal without TLS",
+      "title": "tlsInsecurePlaintext",
       "type": "string"
     },
     "tlsMaxVersion": {

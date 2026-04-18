@@ -176,24 +176,22 @@ func (s *Server) updateAppCallback(old *v1alpha1.Application, new *v1alpha1.Appl
 		return
 	}
 
+	setOperation := false
 	var ev *cloudevents.Event
 
-	// Check if this update is a terminate-operation or a regular spec update
 	if isTerminateOperation(old, new) {
 		ev = s.events.ApplicationEvent(event.TerminateOperation, new)
 	} else {
-		// Prevent sending operation back on regular spec updates.
-		// Allow only nil->non-nil transitions to carry operation (i.e. principal-initiated sync).
-
-		// DeepCopy to avoid mutating the informer object
+		// DeepCopy to avoid mutating the informer object.
+		// Strip the operation from SpecUpdate; operations are
+		// delivered via a dedicated SetOperation event instead.
 		out := new.DeepCopy()
-		if old.Operation == nil && new.Operation != nil {
-			out.Operation = new.Operation.DeepCopy()
-		} else {
-			out.Operation = nil
-		}
-
+		out.Operation = nil
 		ev = s.events.ApplicationEvent(event.SpecUpdate, out)
+
+		if old.Operation == nil && new.Operation != nil {
+			setOperation = true
+		}
 	}
 
 	// Inject trace context into the event for propagation to agent
@@ -201,6 +199,16 @@ func (s *Server) updateAppCallback(old *v1alpha1.Application, new *v1alpha1.Appl
 	q.Add(ev)
 	s.ha.ForwardEventForReplication(event.New(ev, event.TargetApplication), agentName, replication.DirectionOutbound)
 	logCtx.WithField("event_type", ev.Type()).Tracef("Added app to send queue, total length now %d", q.Len())
+
+	// When a new operation appears (nil → non-nil), send it as a separate
+	// SetOperation event so that it is not overwritten by the next SpecUpdate.
+	if setOperation {
+		opEv := s.events.ApplicationEvent(event.SetOperation, new)
+		tracing.InjectTraceContext(ctx, opEv)
+		q.Add(opEv)
+		s.ha.ForwardEventForReplication(event.New(opEv, event.TargetApplication), agentName, replication.DirectionOutbound)
+		logCtx.WithField("event_type", opEv.Type()).Trace("Added SetOperation to send queue")
+	}
 
 	if s.metrics != nil {
 		s.metrics.ApplicationUpdated.Inc()
@@ -481,6 +489,9 @@ func (s *Server) deleteAppProjectCallback(outbound *v1alpha1.AppProject) {
 
 	ev := s.events.AppProjectEvent(event.Delete, outbound)
 	s.ha.ForwardEventForReplication(event.New(ev, event.TargetAppProject), outbound.Namespace, replication.DirectionOutbound)
+
+	// Project is deleted, remove all repositories and credentials that reference this project
+	s.syncRepositoriesForProject(ctx, outbound.Name, outbound.Namespace, logCtx)
 
 	if s.metrics != nil {
 		s.metrics.AppProjectDeleted.Inc()
@@ -865,7 +876,9 @@ func (s *Server) syncRepositoryUpdatesToAgents(ctx context.Context, old, new *co
 
 	newProject, err := s.projectManager.Get(s.ctx, string(newProjectName), new.Namespace)
 	if err != nil {
-		logCtx.WithError(err).Error("failed to get the project that is currently referenced by the repository secret")
+		if !errors.IsNotFound(err) {
+			logCtx.WithError(err).Error("failed to get the project that is currently referenced by the repository secret")
+		}
 	} else {
 		newAgents = s.mapAppProjectToAgents(*newProject)
 	}
