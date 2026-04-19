@@ -2,39 +2,85 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "argocd-agent-principal.fullname" . }}-redis-proxy
+  name: {{ include "argocd-agent-principal.fullname" . }}
   namespace: {{ include "argocd-agent-principal.namespace" . }}
   labels:
     {{- include "argocd-agent-principal.labels" . | nindent 4 }}
-    app.kubernetes.io/component: network-policy
 spec:
   podSelector:
     matchLabels:
       {{- include "argocd-agent-principal.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: principal
   policyTypes:
   - Ingress
+  {{- if .Values.networkPolicy.egress }}
+  - Egress
+  {{- end }}
   ingress:
-  # Allow Redis proxy port (6379) only from Argo CD components
-  - from:
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/part-of: argocd
-    ports:
-    - protocol: TCP
-      port: 6379
-  # Allow principal gRPC port (8443) from agents (may come from external clusters)
+  {{- if .Values.networkPolicy.customIngressRules }}
+  {{- toYaml .Values.networkPolicy.customIngressRules | nindent 2 }}
+  {{- else }}
+  # Redis proxy (6379) — sources controlled by networkPolicy.redisProxyIngress.from
   - ports:
     - protocol: TCP
-      port: 8443
-  # Allow metrics and healthz from monitoring
+      port: {{ .Values.service.redisProxy.port }}
+    {{- with .Values.networkPolicy.redisProxyIngress.from }}
+    from:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  # gRPC principal (8443) — sources controlled by networkPolicy.grpcIngress.from
+  # Empty from[] allows any source (required when agents connect from outside the cluster).
+  - ports:
+    - protocol: TCP
+      port: {{ .Values.params.listenPort | int }}
+    {{- with .Values.networkPolicy.grpcIngress.from }}
+    from:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  # Metrics / healthz from the monitoring namespace
   - from:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }}
     ports:
     - protocol: TCP
-      port: 8000
+      port: {{ .Values.service.metrics.port }}
     - protocol: TCP
-      port: 8003
+      port: {{ .Values.service.healthz.port }}
+  # Resource proxy (9090) — optional, gated on service.resourceProxy.enabled
+  {{- if .Values.service.resourceProxy.enabled }}
+  - ports:
+    - protocol: TCP
+      port: {{ .Values.service.resourceProxy.port }}
+    {{- with .Values.networkPolicy.resourceProxyIngress.from }}
+    from:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  # extraIngress always appends, whether or not customIngressRules is set,
+  # so users combining a custom override with additional rules aren't surprised.
+  {{- with .Values.networkPolicy.extraIngress }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+  {{- with .Values.networkPolicy.egress }}
+  egress:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{/*
+Extra standalone NetworkPolicy resources defined by the user via
+networkPolicy.extraPolicies. The map key becomes the name suffix.
+*/}}
+{{- range $name, $spec := .Values.networkPolicy.extraPolicies }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-%s" (include "argocd-agent-principal.fullname" $) $name }}
+  namespace: {{ include "argocd-agent-principal.namespace" $ }}
+  labels:
+    {{- include "argocd-agent-principal.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  {{- toYaml $spec | nindent 2 }}
 {{- end }}

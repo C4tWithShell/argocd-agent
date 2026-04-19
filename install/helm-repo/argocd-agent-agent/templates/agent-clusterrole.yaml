@@ -1,3 +1,4 @@
+{{- if and .Values.rbac.create .Values.rbac.createClusterRole }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -43,15 +44,17 @@ rules:
     - clusterrolebindings
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
-# Argo CD resources
+# Argo CD resources — enumerate the CRDs the agent actually reconciles
+# instead of granting "*" on the whole apiGroup.
 - apiGroups: ["argoproj.io"]
-  resources: ["*"]
-  verbs: ["*"]
+  resources:
+    - applications
+    - appprojects
+    - applicationsets
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
-# API discovery (required for resource proxy)
-- apiGroups: [""]
-  resources: ["*"]
-  verbs: ["get", "list"]
+# API discovery for the resource proxy. Needed so the agent can respond to
+# arbitrary resource queries from the principal; `get`/`list` only.
 - apiGroups: ["*"]
   resources: ["*"]
   verbs: ["get", "list"]
@@ -65,3 +68,4 @@ rules:
 - apiGroups: ["monitoring.coreos.com"]
   resources: ["servicemonitors", "prometheusrules"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}

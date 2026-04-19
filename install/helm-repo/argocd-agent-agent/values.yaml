@@ -5,6 +5,12 @@
 ## @section Global
 # -- Override namespace to deploy the agent into. Leave empty to use the release namespace.
 namespaceOverride: ""
+# -- Override the chart name used in `app.kubernetes.io/name`. Also changes
+# `spec.selector.matchLabels`, which is immutable — do not set after initial
+# install unless you are prepared to delete+reinstall.
+nameOverride: ""
+# -- Override the fully-qualified resource name (defaults to `<release>-agent-helm`).
+fullnameOverride: ""
 
 ## @section Image
 image:
@@ -18,6 +24,20 @@ image:
 ## @section Deployment
 # -- Number of replicas for the agent Deployment.
 replicaCount: 1
+# -- Image pull secrets for private registries.
+imagePullSecrets: []
+# -- Annotations for the Deployment resource itself (distinct from podAnnotations).
+deploymentAnnotations: {}
+# -- Deployment update strategy (passed through as `spec.strategy`).
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 25%
+    maxUnavailable: 25%
+# -- Number of old ReplicaSets to retain for rollback.
+revisionHistoryLimit: 10
+# -- Time allowed for the Deployment to make progress before the controller reports failure.
+progressDeadlineSeconds: 600
 # -- Name of the TLS Secret containing client cert/key for mTLS.
 tlsSecretName: "argocd-agent-client-tls"
 # -- Name of the Secret containing root CA certificate.
@@ -35,6 +55,42 @@ resources:
 # -- Automount API credentials for the Service Account into the pod.
 automountServiceAccountToken: true
 
+## @section Pod security context
+# -- Pod-level securityContext. Applied to the Pod spec.
+podSecurityContext:
+  fsGroup: 999
+  fsGroupChangePolicy: "OnRootMismatch"
+  runAsGroup: 999
+  runAsNonRoot: true
+  runAsUser: 999
+  seccompProfile:
+    type: RuntimeDefault
+
+## @section Container security context
+# -- Container-level securityContext. Applied to the agent container.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsGroup: 999
+  runAsNonRoot: true
+  runAsUser: 999
+  seccompProfile:
+    type: RuntimeDefault
+
+## @section RBAC
+rbac:
+  # -- Create namespace-scoped Role and RoleBinding for the agent.
+  create: true
+  # -- Create cluster-scoped ClusterRole and ClusterRoleBinding. Required for
+  # destination-based mapping, create-namespace, and resource-proxy discovery
+  # across multiple namespaces. Leave `false` to keep the agent strictly
+  # namespace-scoped (default).
+  createClusterRole: false
+
 ## @section ServiceAccount
 # -- ServiceAccount configuration.
 serviceAccount:
@@ -44,8 +100,6 @@ serviceAccount:
   name: ""
   # -- Annotations to add to the ServiceAccount.
   annotations: {}
-  # -- Automount API credentials for the Service Account
-  automountServiceAccountToken: true
 
 ## @section Pod Scheduling and Metadata
 # -- Node selector for scheduling the agent Pod.
@@ -54,12 +108,34 @@ nodeSelector: {}
 affinity: {}
 # -- Tolerations for the agent Pod.
 tolerations: []
+# -- Topology spread constraints for the agent Pod.
+topologySpreadConstraints: []
 # -- Additional annotations to add to the agent Pod.
 podAnnotations: {}
 # -- Additional labels to add to the agent Pod.
 podLabels: {}
 # -- PriorityClassName for the agent Pod.
 priorityClassName: ""
+# -- Grace period for Pod termination (seconds).
+terminationGracePeriodSeconds: 30
+# -- Host aliases injected into /etc/hosts of the agent Pod.
+hostAliases: []
+# -- DNS policy for the Pod (e.g. ClusterFirst, None). Empty leaves the default.
+dnsPolicy: ""
+# -- DNS config for the Pod. Only honored when `dnsPolicy` is "None".
+dnsConfig: {}
+
+## @section Extension Hooks
+# -- Extra environment variables to append to the agent container. List of EnvVar objects.
+extraEnv: []
+# -- Names of existing ConfigMaps to attach via envFrom.
+extraEnvVarsCM: []
+# -- Names of existing Secrets to attach via envFrom.
+extraEnvVarsSecret: []
+# -- Extra volumes to add to the Pod spec.
+extraVolumes: []
+# -- Extra volumeMounts to add to the agent container.
+extraVolumeMounts: []
 
 ## @section Probes
 # -- Liveness and readiness probe configuration.
@@ -150,8 +226,6 @@ tlsCipherSuites: ""
 # -- Comma-separated list of additional namespaces the agent is allowed to
 # manage applications in (used with applications in any namespace feature). Supports glob patterns (e.g., "team-*,prod-*").
 allowedNamespaces: ""
-# -- Whether to connect to the principal without TLS
-tlsInsecurePlaintext: "false"
 
 ## @section Destination-Based Mapping
 # -- Whether to enable destination-based mapping. When enabled, the agent
@@ -226,6 +300,42 @@ serviceMonitor:
   scheme: ""
   # -- Prometheus ServiceMonitor tlsConfig
   tlsConfig: {}
+
+## @section NetworkPolicy
+# -- NetworkPolicy for the agent Pod. The agent does not expose gRPC; only
+# metrics (8181) and healthz (8002) need ingress rules by default. Egress to
+# the principal and Redis is left open unless `egress` is explicitly set.
+networkPolicy:
+  # -- Whether to create a NetworkPolicy for the agent.
+  enabled: false
+  # -- Namespace label value matched for metrics/healthz ingress
+  # (`kubernetes.io/metadata.name`).
+  monitoringNamespace: "monitoring"
+
+  # -- Additional ingress rules appended to the generated NetworkPolicy.
+  # Each entry must be a valid NetworkPolicyIngressRule.
+  extraIngress: []
+
+  # -- Egress rules. When non-empty, "Egress" is added to policyTypes.
+  egress: []
+
+  # -- Fully replace the generated ingress rules with a custom list.
+  # When set, the built-in metrics/healthz rule is ignored.
+  customIngressRules: []
+
+  # -- Additional standalone NetworkPolicy resources. The map key becomes the
+  # name suffix (<fullname>-<key>); the value is the spec.
+  extraPolicies: {}
+
+## @section Pod Disruption Budget
+# NOTE: A PDB is only useful when replicaCount > 1. With the default
+# replicaCount: 1 and minAvailable: 1, voluntary evictions (node drain,
+# cluster upgrades) are blocked indefinitely since there is no second
+# replica to take over. Scale replicaCount > 1 before enabling.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1
 
 ## @section Tests
 # -- Configuration for helm-chart tests.

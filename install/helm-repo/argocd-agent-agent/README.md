@@ -33,23 +33,45 @@ Kubernetes: `>=1.24.0-0`
 | automountServiceAccountToken | bool | `true` | Automount API credentials for the Service Account into the pod. |
 | cacheRefreshInterval | string | `"10s"` | Cache refresh interval. |
 | createNamespace | bool | `false` | Whether to create target namespaces automatically when they don't exist. Used with destination-based mapping. |
+| deploymentAnnotations | object | `{}` | Annotations for the Deployment resource itself (distinct from podAnnotations). |
 | destinationBasedMapping | bool | `false` | Whether to enable destination-based mapping. When enabled, the agent creates applications in their original namespace (preserving the namespace from the principal) instead of the agent's own namespace. |
+| dnsConfig | object | `{}` | DNS config for the Pod. Only honored when `dnsPolicy` is "None". |
+| dnsPolicy | string | `""` | DNS policy for the Pod (e.g. ClusterFirst, None). Empty leaves the default. |
 | enableCompression | bool | `false` | Whether to enable gRPC compression. |
 | enableResourceProxy | bool | `true` | Whether to enable resource proxy. |
 | enableWebSocket | bool | `false` | Whether to enable WebSocket connections. |
+| extraEnv | list | `[]` | Extra environment variables to append to the agent container. List of EnvVar objects. |
+| extraEnvVarsCM | list | `[]` | Names of existing ConfigMaps to attach via envFrom. |
+| extraEnvVarsSecret | list | `[]` | Names of existing Secrets to attach via envFrom. |
+| extraVolumeMounts | list | `[]` | Extra volumeMounts to add to the agent container. |
+| extraVolumes | list | `[]` | Extra volumes to add to the Pod spec. |
+| fullnameOverride | string | `""` | Override the fully-qualified resource name (defaults to `<release>-agent-helm`). |
 | healthzPort | string | `"8002"` | Healthz server port exposed by the agent. |
+| hostAliases | list | `[]` | Host aliases injected into /etc/hosts of the agent Pod. |
 | image.pullPolicy | string | `"IfNotPresent"` | Image pull policy for the agent container. |
 | image.repository | string | `"ghcr.io/argoproj-labs/argocd-agent/argocd-agent"` | Container image repository for the agent. |
 | image.tag | string | `""` | Overrides the image tag whose default is the chart appVersion. |
+| imagePullSecrets | list | `[]` | Image pull secrets for private registries. |
 | keepAliveInterval | string | `"50s"` | Keep-alive interval for connections. |
 | labelSelector | string | `""` | Kubernetes label selector to restrict which resources the agent watches. Only matching resources will be listed, watched, and processed. |
 | logFormat | string | `"text"` | Log format for the agent (text or json). |
 | logLevel | string | `"info"` | Log level for the agent. |
 | metricsPort | string | `"8181"` | Metrics server port exposed by the agent. |
+| nameOverride | string | `""` | Override the chart name used in `app.kubernetes.io/name`. Also changes `spec.selector.matchLabels`, which is immutable — do not set after initial install unless you are prepared to delete+reinstall. |
 | namespaceOverride | string | `""` | Override namespace to deploy the agent into. Leave empty to use the release namespace. |
+| networkPolicy | object | `{"customIngressRules":[],"egress":[],"enabled":false,"extraIngress":[],"extraPolicies":{},"monitoringNamespace":"monitoring"}` | NetworkPolicy for the agent Pod. The agent does not expose gRPC; only metrics (8181) and healthz (8002) need ingress rules by default. Egress to the principal and Redis is left open unless `egress` is explicitly set. |
+| networkPolicy.customIngressRules | list | `[]` | Fully replace the generated ingress rules with a custom list. When set, the built-in metrics/healthz rule is ignored. |
+| networkPolicy.egress | list | `[]` | Egress rules. When non-empty, "Egress" is added to policyTypes. |
+| networkPolicy.enabled | bool | `false` | Whether to create a NetworkPolicy for the agent. |
+| networkPolicy.extraIngress | list | `[]` | Additional ingress rules appended to the generated NetworkPolicy. Each entry must be a valid NetworkPolicyIngressRule. |
+| networkPolicy.extraPolicies | object | `{}` | Additional standalone NetworkPolicy resources. The map key becomes the name suffix (<fullname>-<key>); the value is the spec. |
+| networkPolicy.monitoringNamespace | string | `"monitoring"` | Namespace label value matched for metrics/healthz ingress (`kubernetes.io/metadata.name`). |
 | nodeSelector | object | `{}` | Node selector for scheduling the agent Pod. |
 | podAnnotations | object | `{}` | Additional annotations to add to the agent Pod. |
+| podDisruptionBudget.enabled | bool | `false` |  |
+| podDisruptionBudget.minAvailable | int | `1` |  |
 | podLabels | object | `{}` | Additional labels to add to the agent Pod. |
+| podSecurityContext | object | `{"fsGroup":999,"fsGroupChangePolicy":"OnRootMismatch","runAsGroup":999,"runAsNonRoot":true,"runAsUser":999,"seccompProfile":{"type":"RuntimeDefault"}}` | Pod-level securityContext. Applied to the Pod spec. |
 | pprofPort | string | `"0"` | Port for pprof server (0 disables pprof). |
 | priorityClassName | string | `""` | PriorityClassName for the agent Pod. |
 | probes | object | `{"liveness":{"enabled":true,"failureThreshold":3,"httpGet":{"path":"/healthz","port":"healthz"},"initialDelaySeconds":10,"periodSeconds":10,"timeoutSeconds":2},"readiness":{"enabled":true,"failureThreshold":3,"httpGet":{"path":"/healthz","port":"healthz"},"initialDelaySeconds":5,"periodSeconds":10,"timeoutSeconds":2}}` | Liveness and readiness probe configuration. |
@@ -63,6 +85,9 @@ Kubernetes: `>=1.24.0-0`
 | probes.readiness.initialDelaySeconds | int | `5` | Initial delay before the first readiness probe. |
 | probes.readiness.periodSeconds | int | `10` | Frequency of readiness probes. |
 | probes.readiness.timeoutSeconds | int | `2` | Timeout for readiness probe. |
+| progressDeadlineSeconds | int | `600` | Time allowed for the Deployment to make progress before the controller reports failure. |
+| rbac.create | bool | `true` | Create namespace-scoped Role and RoleBinding for the agent. |
+| rbac.createClusterRole | bool | `false` | Create cluster-scoped ClusterRole and ClusterRoleBinding. Required for destination-based mapping, create-namespace, and resource-proxy discovery across multiple namespaces. Leave `false` to keep the agent strictly namespace-scoped (default). |
 | redisAddress | string | `"argocd-redis:6379"` | Redis address used by the agent. |
 | redisTLS | object | `{"caPath":"/app/config/redis-tls/ca.crt","enabled":false,"insecure":false,"secretName":"argocd-redis-tls"}` | Redis TLS configuration. |
 | redisTLS.caPath | string | `"/app/config/redis-tls/ca.crt"` | Path to CA certificate for verifying Redis TLS certificate. This path is where the CA certificate will be mounted inside the container. |
@@ -72,6 +97,8 @@ Kubernetes: `>=1.24.0-0`
 | redisUsername | string | `""` | Redis username for authentication. |
 | replicaCount | int | `1` | Number of replicas for the agent Deployment. |
 | resources | object | `{"limits":{"cpu":"500m","memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resource requests and limits for the agent Pod. |
+| revisionHistoryLimit | int | `10` | Number of old ReplicaSets to retain for rollback. |
+| securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"privileged":false,"readOnlyRootFilesystem":true,"runAsGroup":999,"runAsNonRoot":true,"runAsUser":999,"seccompProfile":{"type":"RuntimeDefault"}}` | Container-level securityContext. Applied to the agent container. |
 | server | string | `"principal.server.address.com"` | Principal server address (hostname or host:port). |
 | serverPort | string | `"443"` | Principal server port. |
 | service | object | `{"healthz":{"annotations":{},"port":8002,"targetPort":8002},"metrics":{"annotations":{},"port":8181,"targetPort":8181}}` | Service configuration for metrics and healthz endpoints. |
@@ -98,6 +125,7 @@ Kubernetes: `>=1.24.0-0`
 | serviceMonitor.scheme | string | `""` | Prometheus ServiceMonitor scheme |
 | serviceMonitor.scrapeTimeout | string | `"10s"` | Prometheus scrape timeout. Must be a valid duration string (e.g. "10s"). |
 | serviceMonitor.tlsConfig | object | `{}` | Prometheus ServiceMonitor tlsConfig |
+| terminationGracePeriodSeconds | int | `30` | Grace period for Pod termination (seconds). |
 | tests | object | `{"enabled":false,"image":"bitnamilegacy/kubectl","tag":"1.33.4"}` | Configuration for helm-chart tests. |
 | tests.enabled | bool | `false` | By default, chart tests are disabled. |
 | tests.image | string | `"bitnamilegacy/kubectl"` | Test image. |
@@ -105,15 +133,16 @@ Kubernetes: `>=1.24.0-0`
 | tlsCipherSuites | string | `""` | Comma-separated list of TLS cipher suites. Empty uses Go defaults. |
 | tlsClientCertPath | string | `""` | Path to the TLS client certificate. |
 | tlsClientInSecure | string | `"false"` | Whether to skip TLS verification for client connections. |
-| tlsInsecurePlaintext | bool | `false` | Whether to connect to the principal without TLS |
 | tlsClientKeyPath | string | `""` | Path to the TLS client key. |
-| tlsInsecurePlaintext | string | `"false"` | Whether to connect to the principal without TLS |
+| tlsInsecurePlaintext | string | `"false"` | Connect to the principal without TLS. Only use when running behind a service mesh (e.g., Istio) that handles mTLS at the sidecar level. |
 | tlsMaxVersion | string | `""` | Maximum TLS version to use (tls1.1, tls1.2, tls1.3). Empty uses highest available. |
 | tlsMinVersion | string | `""` | Minimum TLS version to use (tls1.1, tls1.2, tls1.3). Empty uses Go default. |
 | tlsRootCAPath | string | `""` | Path to the TLS root CA certificate. |
 | tlsRootCASecretName | string | `"argocd-agent-ca"` | Name of the Secret containing root CA certificate. |
 | tlsSecretName | string | `"argocd-agent-client-tls"` | Name of the TLS Secret containing client cert/key for mTLS. |
 | tolerations | list | `[]` | Tolerations for the agent Pod. |
+| topologySpreadConstraints | list | `[]` | Topology spread constraints for the agent Pod. |
+| updateStrategy | object | `{"rollingUpdate":{"maxSurge":"25%","maxUnavailable":"25%"},"type":"RollingUpdate"}` | Deployment update strategy (passed through as `spec.strategy`). |
 | userPasswordSecretName | string | `"argocd-agent-agent-userpass"` | Name of the Secret containing agent username/password (if used). |
 
 ----------------------------------------------

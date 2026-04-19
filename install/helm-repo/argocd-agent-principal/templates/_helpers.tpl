@@ -89,3 +89,26 @@ TLS secret name
 {{- define "argocd-agent-principal.tlsSecretName" -}}
 {{- default (printf "%s-tls" (include "argocd-agent-principal.fullname" .)) .Values.tlsSecret.secretName }}
 {{- end }}
+
+{{/*
+gRPC Service name (defaults to fullname)
+*/}}
+{{- define "argocd-agent-principal.grpcServiceName" -}}
+{{- default (include "argocd-agent-principal.fullname" .) .Values.service.grpc.name }}
+{{- end }}
+
+{{/*
+Redis proxy Service name (defaults to <fullname>-redis-proxy).
+For backwards compatibility with existing Argo CD integrations expecting
+"argocd-agent-redis-proxy", set service.redisProxy.name explicitly.
+*/}}
+{{- define "argocd-agent-principal.redisProxyServiceName" -}}
+{{- default (printf "%s-redis-proxy" (include "argocd-agent-principal.fullname" .)) .Values.service.redisProxy.name }}
+{{- end }}
+
+{{/*
+Resource proxy Service name (defaults to <fullname>-resource-proxy).
+*/}}
+{{- define "argocd-agent-principal.resourceProxyServiceName" -}}
+{{- default (printf "%s-resource-proxy" (include "argocd-agent-principal.fullname" .)) .Values.service.resourceProxy.name }}
+{{- end }}

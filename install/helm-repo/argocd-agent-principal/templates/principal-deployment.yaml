@@ -11,6 +11,12 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  progressDeadlineSeconds: {{ .Values.progressDeadlineSeconds }}
+  {{- with .Values.updateStrategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "argocd-agent-principal.selectorLabels" . | nindent 6 }}
@@ -43,6 +49,18 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dnsPolicy }}
+      dnsPolicy: {{ . }}
+      {{- end }}
+      {{- with .Values.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
         - name: {{ include "argocd-agent-principal.name" . }}
           image: {{ include "argocd-agent-principal.image" . }}
@@ -346,14 +364,33 @@ spec:
           {{- with .Values.extraEnv }}
           {{- toYaml . | nindent 10 }}
           {{- end }}
+          {{- if or .Values.extraEnvVarsCM .Values.extraEnvVarsSecret }}
+          envFrom:
+            {{- range .Values.extraEnvVarsCM }}
+            - configMapRef:
+                name: {{ . }}
+            {{- end }}
+            {{- range .Values.extraEnvVarsSecret }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
           ports:
-            - containerPort: 8443
+            - containerPort: {{ .Values.params.listenPort | int }}
               name: principal
+            # redis-proxy / resource-proxy ports are hardcoded in the principal
+            # binary (no flags / env vars); service targetPort references these
+            # named ports so changing service.*.port on the values side doesn't
+            # drift the container port.
             - containerPort: 6379
               name: redis-proxy
-            - containerPort: 8000
+            {{- if .Values.service.resourceProxy.enabled }}
+            - containerPort: 9090
+              name: resource-proxy
+            {{- end }}
+            - containerPort: {{ .Values.params.metricsPort | int }}
               name: metrics
-            - containerPort: 8003
+            - containerPort: {{ .Values.params.healthzPort | int }}
               name: healthz
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
@@ -443,5 +480,9 @@ spec:
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}

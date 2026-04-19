@@ -14,6 +14,6 @@ spec:
     - name: healthz
       protocol: TCP
       port: {{ .Values.service.healthz.port }}
-      targetPort: {{ .Values.service.healthz.targetPort }}
+      targetPort: healthz
   selector:
     {{- include "argocd-agent-agent.selectorLabels" . | nindent 4 }}

@@ -7,19 +7,19 @@
 {{- if eq .Values.service.grpc.type "LoadBalancer" }}
    Run the following to get the external IP/hostname once assigned:
 
-     kubectl get svc {{ include "argocd-agent-principal.fullname" . }} \
+     kubectl get svc {{ include "argocd-agent-principal.grpcServiceName" . }} \
        -n {{ .Release.Namespace }} \
        -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
 {{- else if eq .Values.service.grpc.type "NodePort" }}
    Accessible via NodePort. Get the port with:
 
-     kubectl get svc {{ include "argocd-agent-principal.fullname" . }} \
+     kubectl get svc {{ include "argocd-agent-principal.grpcServiceName" . }} \
        -n {{ .Release.Namespace }}
 {{- else }}
    Service type is ClusterIP. Use port-forward to access locally:
 
-     kubectl port-forward svc/{{ include "argocd-agent-principal.fullname" . }} \
-       8443:{{ .Values.service.grpc.port }} -n {{ .Release.Namespace }}
+     kubectl port-forward svc/{{ include "argocd-agent-principal.grpcServiceName" . }} \
+       {{ .Values.service.grpc.port }}:{{ .Values.service.grpc.port }} -n {{ .Release.Namespace }}
 {{- end }}
 
 3. Authentication method: {{ .Values.params.auth }}
@@ -42,5 +42,5 @@
 
    # Health check
    kubectl port-forward svc/{{ include "argocd-agent-principal.fullname" . }}-healthz \
-     8003:8003 -n {{ .Release.Namespace }}
-   curl http://localhost:8003/healthz
+     {{ .Values.service.healthz.port }}:{{ .Values.service.healthz.port }} -n {{ .Release.Namespace }}
+   curl http://localhost:{{ .Values.service.healthz.port }}/healthz

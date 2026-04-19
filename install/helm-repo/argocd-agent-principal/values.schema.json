@@ -201,7 +201,7 @@
       "type": "string"
     },
     "networkPolicy": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "#",
       "properties": {
         "enabled": {
@@ -215,6 +215,59 @@
           "description": "Namespace label value for monitoring namespace (used for metrics/healthz ingress)",
           "title": "monitoringNamespace",
           "type": "string"
+        },
+        "grpcIngress": {
+          "additionalProperties": true,
+          "description": "Ingress peers allowed to reach the gRPC port (8443). Empty from[] = any source.",
+          "properties": {
+            "from": {
+              "items": { "required": [] },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "redisProxyIngress": {
+          "additionalProperties": true,
+          "description": "Ingress peers allowed to reach the Redis proxy port (6379).",
+          "properties": {
+            "from": {
+              "items": { "required": [] },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "resourceProxyIngress": {
+          "additionalProperties": true,
+          "description": "Ingress peers allowed to reach the Resource proxy port (9090).",
+          "properties": {
+            "from": {
+              "items": { "required": [] },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "extraIngress": {
+          "description": "Additional ingress rules appended to the generated policy",
+          "items": { "required": [] },
+          "type": "array"
+        },
+        "egress": {
+          "description": "Egress rules. Non-empty adds 'Egress' to policyTypes.",
+          "items": { "required": [] },
+          "type": "array"
+        },
+        "customIngressRules": {
+          "description": "Fully replace generated ingress rules with this custom list.",
+          "items": { "required": [] },
+          "type": "array"
+        },
+        "extraPolicies": {
+          "additionalProperties": true,
+          "description": "Map of extra NetworkPolicy specs keyed by name suffix.",
+          "type": "object"
         }
       },
       "required": [
@@ -1087,7 +1140,7 @@
       "description": "#\nService configuration for metrics and healthz endpoints.",
       "properties": {
         "grpc": {
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "annotations": {
               "additionalProperties": false,
@@ -1183,7 +1236,7 @@
           "type": "object"
         },
         "redisProxy": {
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "annotations": {
               "additionalProperties": false,
@@ -1212,7 +1265,7 @@
           "type": "object"
         },
         "resourceProxy": {
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "annotations": {
               "additionalProperties": false,
@@ -1262,12 +1315,6 @@
           "title": "annotations",
           "type": "object"
         },
-        "automountServiceAccountToken": {
-          "default": true,
-          "description": "Automount API credentials for the Service Account",
-          "title": "automountServiceAccountToken",
-          "type": "boolean"
-        },
         "create": {
           "default": true,
           "description": "Whether to create a ServiceAccount",
@@ -1284,8 +1331,7 @@
       "required": [
         "create",
         "annotations",
-        "name",
-        "automountServiceAccountToken"
+        "name"
       ],
       "title": "serviceAccount",
       "type": "object"
@@ -1435,8 +1481,8 @@
       "description": "#",
       "properties": {
         "create": {
-          "default": true,
-          "description": "Create the userpass secret",
+          "default": false,
+          "description": "Create the userpass secret. Only needed when params.auth uses \"userpass:\".",
           "title": "create",
           "type": "boolean"
         },

@@ -14,6 +14,6 @@ spec:
     - name: metrics
       protocol: TCP
       port: {{ .Values.service.metrics.port }}
-      targetPort: {{ .Values.service.metrics.targetPort }}
+      targetPort: metrics
   selector:
     {{- include "argocd-agent-agent.selectorLabels" . | nindent 4 }}

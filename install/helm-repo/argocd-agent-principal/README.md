@@ -1,6 +1,6 @@
 # argocd-agent-principal
 
-![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 0.4.1](https://img.shields.io/badge/AppVersion-0.4.1-informational?style=flat-square)
+![Version: 0.2.0](https://img.shields.io/badge/Version-0.2.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.8.1](https://img.shields.io/badge/AppVersion-v0.8.1-informational?style=flat-square)
 
 Helm chart for the ArgoCD Agent Principal component
 
@@ -27,13 +27,18 @@ Kubernetes: `>=1.24.0-0`
 | affinity | object | `{}` | Affinity rules for pod scheduling |
 | automountServiceAccountToken | bool | `true` | Automount API credentials for the Service Account into the pod. |
 | deploymentAnnotations | object | `{}` | Annotations for the Deployment |
+| dnsConfig | object | `{}` | DNS config for the Pod (only honored when dnsPolicy is "None") |
+| dnsPolicy | string | `""` | DNS policy for the Pod (e.g. ClusterFirst, None) |
 | extraEnv | list | `[]` |  |
+| extraEnvVarsCM | list | `[]` |  |
+| extraEnvVarsSecret | list | `[]` |  |
 | extraVolumeMounts | list | `[]` |  |
 | extraVolumes | list | `[]` |  |
 | fullnameOverride | string | `""` | Override the full resource name |
-| image.pullPolicy | string | `"Always"` | Image pull policy |
+| hostAliases | list | `[]` | Host aliases injected into /etc/hosts |
+| image.pullPolicy | string | `"IfNotPresent"` | Image pull policy |
 | image.repository | string | `"ghcr.io/argoproj-labs/argocd-agent/argocd-agent"` | Image repository |
-| image.tag | string | `"latest"` | Image tag |
+| image.tag | string | `""` | Image tag |
 | imagePullSecrets | list | `[]` | Image pull secrets |
 | ingress.annotations | object | `{}` |  |
 | ingress.className | string | `""` |  |
@@ -44,8 +49,15 @@ Kubernetes: `>=1.24.0-0`
 | ingress.tls | list | `[]` |  |
 | nameOverride | string | `""` | Override the chart name |
 | namespaceOverride | string | `""` | Override namespace to deploy the agent into. Leave empty to use the release namespace. |
+| networkPolicy.customIngressRules | list | `[]` | Fully replace the generated ingress rules with a custom list. Useful when the built-in grpcIngress/redisProxyIngress/monitoring pattern does not fit. When set, all other ingress knobs above are ignored. |
+| networkPolicy.egress | list | `[]` | Egress rules. When non-empty, "Egress" is added to policyTypes. |
 | networkPolicy.enabled | bool | `false` | Whether to create a NetworkPolicy for the principal |
+| networkPolicy.extraIngress | list | `[]` | Additional ingress rules appended to the generated NetworkPolicy. Each entry must be a valid NetworkPolicyIngressRule. |
+| networkPolicy.extraPolicies | object | `{}` | Additional standalone NetworkPolicy resources. The map key becomes the name suffix (<fullname>-<key>); the value is the spec. Useful for layering per-tenant/per-source rules without forking the chart. |
+| networkPolicy.grpcIngress | object | `{"from":[]}` | Ingress rule for the gRPC principal port (8443). `from` is a list of NetworkPolicyPeer entries. Leave empty to allow from anywhere — which is the right default when agents live outside this cluster and reach principal via LoadBalancer / Ingress / Gateway. For in-cluster agents or ingress-terminated setups, restrict to specific peers. |
 | networkPolicy.monitoringNamespace | string | `"monitoring"` | Namespace label value for monitoring namespace (used for metrics/healthz ingress) |
+| networkPolicy.redisProxyIngress | object | `{"from":[{"podSelector":{"matchLabels":{"app.kubernetes.io/part-of":"argocd"}}}]}` | Ingress rule for the Redis proxy port (6379). Defaults to allowing any pod labeled app.kubernetes.io/part-of=argocd within the cluster. |
+| networkPolicy.resourceProxyIngress | object | `{"from":[]}` | Ingress rule for the Resource proxy port (9090). Applied only when service.resourceProxy.enabled is true. Empty = allow any source. |
 | nodeSelector | object | `{}` | Node selector for scheduling the agent Pod. |
 | params.allowedNamespaces | string | `""` | Comma-separated list of namespaces to watch (supports shell-style wildcards) |
 | params.auth | string | `"mtls:CN=([^,]+)"` | Authentication method. Format: <method>:<config> Examples:   "mtls:CN=([^,]+)"   "userpass:/app/config/userpass/passwd"   "header:x-forwarded-client-cert:^.*URI=spiffe://[^/]+/ns/[^/]+/sa/([^,;]+)" |
@@ -57,7 +69,7 @@ Kubernetes: `>=1.24.0-0`
 | params.jwt.secretName | string | `"argocd-agent-jwt"` | Name of the secret containing the JWT signing key |
 | params.keepAliveMinInterval | string | `"0"` | Drop agent connections that send keepalive pings more often than this interval |
 | params.labelSelector | string | `""` | Kubernetes label selector to restrict which resources the principal watches. Used in hybrid architectures where a traditional app-controller coexists with the principal. |
-| params.listenHost | string | `""` | Interface address to listen on. Empty = all interfaces. |
+| params.listenHost | string | `""` | Interface address to listen on. Empty string binds to all interfaces, which is the correct default when the gRPC service is exposed through a Kubernetes Service (LoadBalancer / NodePort / Ingress) and agents connect from outside the pod network. Use "127.0.0.1" only in service-mesh or mTLS-sidecar deployments where another local process terminates TLS — in those topologies binding to localhost prevents direct pod traffic. |
 | params.listenPort | string | `"8443"` | gRPC server listen port |
 | params.logFormat | string | `"text"` | Log format: text or json |
 | params.logLevel | string | `"info"` | Log level: trace, debug, info, warn, error |
@@ -117,12 +129,14 @@ Kubernetes: `>=1.24.0-0`
 | probes.readiness.initialDelaySeconds | int | `5` | Initial delay before the first readiness probe. |
 | probes.readiness.periodSeconds | int | `10` | Frequency of readiness probes. |
 | probes.readiness.timeoutSeconds | int | `2` | Timeout for readiness probe. |
+| progressDeadlineSeconds | int | `600` | Deployment progress deadline in seconds |
 | rbac.create | bool | `true` | To create Role and RoleBinding |
 | rbac.createClusterRole | bool | `false` | Whether to create ClusterRole and ClusterRoleBinding |
 | redis.existingSecret | string | `"argocd-redis"` | Name of the secret containing the Redis auth password |
 | redis.passwordKey | string | `"auth"` | Key within the secret |
 | replicaCount | int | `1` | Number of replicas for the principal deployment |
 | resources | object | `{"limits":{"cpu":"500m","memory":"256Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}` | Resource requests and limits for the principal container |
+| revisionHistoryLimit | int | `10` | Number of old ReplicaSets to retain |
 | securityContext.allowPrivilegeEscalation | bool | `false` |  |
 | securityContext.capabilities.drop[0] | string | `"ALL"` |  |
 | securityContext.privileged | bool | `false` |  |
@@ -131,18 +145,20 @@ Kubernetes: `>=1.24.0-0`
 | securityContext.runAsNonRoot | bool | `true` |  |
 | securityContext.runAsUser | int | `999` |  |
 | securityContext.seccompProfile.type | string | `"RuntimeDefault"` |  |
-| service | object | `{"grpc":{"annotations":{},"loadBalancerIP":"","port":443,"type":"LoadBalancer"},"healthz":{"annotations":{},"enabled":true,"port":8003},"metrics":{"annotations":{},"enabled":true,"port":8000},"redisProxy":{"annotations":{},"enabled":true,"port":6379},"resourceProxy":{"annotations":{},"enabled":true,"port":9090}}` | Service configuration for metrics and healthz endpoints. |
+| service | object | `{"grpc":{"annotations":{},"loadBalancerIP":"","name":"","port":443,"type":"LoadBalancer"},"healthz":{"annotations":{},"enabled":true,"port":8003},"metrics":{"annotations":{},"enabled":true,"port":8000},"redisProxy":{"annotations":{},"enabled":true,"name":"","port":6379},"resourceProxy":{"annotations":{},"enabled":true,"name":"","port":9090}}` | Service configuration for metrics and healthz endpoints. |
 | service.grpc.annotations | object | `{}` | Annotations for the gRPC service |
 | service.grpc.loadBalancerIP | string | `""` | LoadBalancer IP (if type=LoadBalancer) |
+| service.grpc.name | string | `""` | Override service name (defaults to chart fullname) |
 | service.grpc.port | int | `443` | Port exposed by the service |
 | service.grpc.type | string | `"LoadBalancer"` | Service type for the gRPC/principal service |
 | service.healthz.enabled | bool | `true` | Whether to create the healthz service |
 | service.metrics.enabled | bool | `true` | Whether to create the metrics service |
 | service.redisProxy.enabled | bool | `true` | Whether to create the redis-proxy service |
+| service.redisProxy.name | string | `""` | Override service name. Defaults to "<fullname>-redis-proxy". Set to "argocd-agent-redis-proxy" if consumers (e.g. argocd-server, argocd-application-controller) are configured to use the legacy name. |
 | service.resourceProxy.enabled | bool | `true` | Whether to create the resource-proxy service |
-| serviceAccount | object | `{"annotations":{},"automountServiceAccountToken":true,"create":true,"name":""}` | ServiceAccount configuration. |
+| service.resourceProxy.name | string | `""` | Override service name. Defaults to "<fullname>-resource-proxy". |
+| serviceAccount | object | `{"annotations":{},"create":true,"name":""}` | ServiceAccount configuration. |
 | serviceAccount.annotations | object | `{}` | Annotations for the ServiceAccount |
-| serviceAccount.automountServiceAccountToken | bool | `true` | Automount API credentials for the Service Account |
 | serviceAccount.create | bool | `true` | Whether to create a ServiceAccount |
 | serviceAccount.name | string | `""` | Name of the ServiceAccount (defaults to chart fullname) |
 | serviceMonitor | object | `{"additionalLabels":{},"annotations":{},"enabled":false,"honorLabels":false,"interval":"30s","metricRelabelings":[],"namespace":"","relabelings":[],"scheme":"","scrapeTimeout":"10s","tlsConfig":{}}` | Prometheus ServiceMonitor configuration. |
@@ -157,12 +173,17 @@ Kubernetes: `>=1.24.0-0`
 | serviceMonitor.scheme | string | `""` | Prometheus ServiceMonitor scheme |
 | serviceMonitor.scrapeTimeout | string | `"10s"` | Prometheus scrape timeout. Must be a valid duration string (e.g. "10s"). |
 | serviceMonitor.tlsConfig | object | `{}` | Prometheus ServiceMonitor tlsConfig |
+| terminationGracePeriodSeconds | int | `30` | Grace period for pod termination (seconds) |
 | tlsSecret.create | bool | `false` | Create the TLS secret (leave false if you manage it externally) |
 | tlsSecret.crt | string | `""` | TLS certificate (PEM) |
 | tlsSecret.key | string | `""` | TLS private key (PEM) |
 | tlsSecret.secretName | string | `""` | Name of the secret (defaults to argocd-agent-principal-tls) |
 | tolerations | list | `[]` | Tolerations for pod scheduling |
-| userpass.create | bool | `true` | Create the userpass secret |
+| topologySpreadConstraints | list | `[]` | Topology spread constraints for pod scheduling |
+| updateStrategy | object | `{"rollingUpdate":{"maxSurge":"25%","maxUnavailable":"25%"},"type":"RollingUpdate"}` | Deployment update strategy |
+| userpass.create | bool | `false` | Create the userpass secret. Only needed when params.auth uses "userpass:". |
 | userpass.passwd | string | `""` | The passwd file contents (bcrypt-hashed credentials) |
 | userpass.secretName | string | `""` | Name of the secret (defaults to argocd-agent-principal-userpass) |
 
+----------------------------------------------
+Autogenerated from chart metadata using [helm-docs v1.14.2](https://github.com/norwoodj/helm-docs/releases/v1.14.2)

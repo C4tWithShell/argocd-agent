@@ -713,12 +713,6 @@
       "title": "tlsClientKeyPath",
       "type": "string"
     },
-    "tlsInsecurePlaintext": {
-      "default": "false",
-      "description": "Whether to connect to the principal without TLS",
-      "title": "tlsInsecurePlaintext",
-      "type": "string"
-    },
     "tlsMaxVersion": {
       "default": "",
       "description": "Maximum TLS version to use (tls1.1, tls1.2, tls1.3). Empty uses highest available.",

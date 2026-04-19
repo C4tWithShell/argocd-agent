@@ -15,9 +15,9 @@ image:
   # -- Image repository
   repository: ghcr.io/argoproj-labs/argocd-agent/argocd-agent
   # -- Image pull policy
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
   # -- Image tag
-  tag: "latest"
+  tag: ""
 
 ## @section Deployment
 # -- Number of replicas for the principal deployment
@@ -36,6 +36,16 @@ resources:
   requests:
     cpu: 100m
     memory: 128Mi
+# -- Deployment update strategy
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 25%
+    maxUnavailable: 25%
+# -- Number of old ReplicaSets to retain
+revisionHistoryLimit: 10
+# -- Deployment progress deadline in seconds
+progressDeadlineSeconds: 600
 
 ## @section ServiceAccount
 # -- ServiceAccount configuration.
@@ -46,8 +56,6 @@ serviceAccount:
   annotations: {}
   # -- Name of the ServiceAccount (defaults to chart fullname)
   name: ""
-  # -- Automount API credentials for the Service Account
-  automountServiceAccountToken: true
 
 ## @section Pod security context
 podSecurityContext:
@@ -80,14 +88,28 @@ nodeSelector: {}
 tolerations: []
 # -- Affinity rules for pod scheduling
 affinity: {}
+# -- Topology spread constraints for pod scheduling
+topologySpreadConstraints: []
 # -- Annotations for the Pod
 podAnnotations: {}
 # -- Additional labels to add to the agent Pod.
 podLabels: {}
 # -- PriorityClassName for the agent Pod.
 priorityClassName: ""
+# -- Grace period for pod termination (seconds)
+terminationGracePeriodSeconds: 30
+# -- Host aliases injected into /etc/hosts
+hostAliases: []
+# -- DNS policy for the Pod (e.g. ClusterFirst, None)
+dnsPolicy: ""
+# -- DNS config for the Pod (only honored when dnsPolicy is "None")
+dnsConfig: {}
 ## -- Extra environment variables to add to the container
 extraEnv: []
+## -- Extra env vars sourced from existing ConfigMaps (list of names, mounted via envFrom)
+extraEnvVarsCM: []
+## -- Extra env vars sourced from existing Secrets (list of names, mounted via envFrom)
+extraEnvVarsSecret: []
 ## -- Extra volume mounts
 extraVolumeMounts: []
 ## -- Extra volumes
@@ -134,7 +156,12 @@ rbac:
 
 ## @section Principal Parameters
 params:
-  # -- Interface address to listen on. Empty = all interfaces.
+  # -- Interface address to listen on. Empty string binds to all interfaces,
+  # which is the correct default when the gRPC service is exposed through a
+  # Kubernetes Service (LoadBalancer / NodePort / Ingress) and agents connect
+  # from outside the pod network. Use "127.0.0.1" only in service-mesh or
+  # mTLS-sidecar deployments where another local process terminates TLS — in
+  # those topologies binding to localhost prevents direct pod traffic.
   listenHost: ""
   # -- gRPC server listen port
   listenPort: "8443"
@@ -263,9 +290,12 @@ redis:
   passwordKey: "auth"
 
 ## @section userpass secret
+# DEPRECATED: The principal only reads this secret when params.auth starts with "userpass:".
+# Leave create=false when using mTLS / header auth to avoid provisioning an
+# empty, unused credential secret.
 userpass:
-  # -- Create the userpass secret
-  create: true
+  # -- Create the userpass secret. Only needed when params.auth uses "userpass:".
+  create: false
   # -- Name of the secret (defaults to argocd-agent-principal-userpass)
   secretName: ""
   # -- The passwd file contents (bcrypt-hashed credentials)
@@ -288,6 +318,8 @@ service:
   grpc:
     # -- Service type for the gRPC/principal service
     type: LoadBalancer
+    # -- Override service name (defaults to chart fullname)
+    name: ""
     # -- Port exposed by the service
     port: 443
     # -- Annotations for the gRPC service
@@ -310,12 +342,18 @@ service:
   redisProxy:
     # -- Whether to create the redis-proxy service
     enabled: true
+    # -- Override service name. Defaults to "<fullname>-redis-proxy".
+    # Set to "argocd-agent-redis-proxy" if consumers (e.g. argocd-server,
+    # argocd-application-controller) are configured to use the legacy name.
+    name: ""
     port: 6379
     annotations: {}
 
   resourceProxy:
     # -- Whether to create the resource-proxy service
     enabled: true
+    # -- Override service name. Defaults to "<fullname>-resource-proxy".
+    name: ""
     port: 9090
     annotations: {}
 
@@ -364,7 +402,82 @@ networkPolicy:
   # -- Namespace label value for monitoring namespace (used for metrics/healthz ingress)
   monitoringNamespace: "monitoring"
 
+  # -- Ingress rule for the gRPC principal port (8443).
+  # `from` is a list of NetworkPolicyPeer entries. Leave empty to allow from
+  # anywhere — which is the right default when agents live outside this cluster
+  # and reach principal via LoadBalancer / Ingress / Gateway. For in-cluster
+  # agents or ingress-terminated setups, restrict to specific peers.
+  grpcIngress:
+    from: []
+    # Example — only allow ingress-nginx and Istio gateway pods:
+    # from:
+    #   - podSelector:
+    #       matchLabels:
+    #         app.kubernetes.io/name: ingress-nginx
+    #   - namespaceSelector:
+    #       matchLabels:
+    #         kubernetes.io/metadata.name: istio-system
+    #     podSelector:
+    #       matchLabels:
+    #         istio: ingressgateway
+
+  # -- Ingress rule for the Redis proxy port (6379).
+  # Defaults to allowing any pod labeled app.kubernetes.io/part-of=argocd
+  # within the cluster.
+  redisProxyIngress:
+    from:
+      - podSelector:
+          matchLabels:
+            app.kubernetes.io/part-of: argocd
+
+  # -- Ingress rule for the Resource proxy port (9090).
+  # Applied only when service.resourceProxy.enabled is true. Empty = allow any source.
+  resourceProxyIngress:
+    from: []
+
+  # -- Additional ingress rules appended to the generated NetworkPolicy.
+  # Each entry must be a valid NetworkPolicyIngressRule.
+  extraIngress: []
+
+  # -- Egress rules. When non-empty, "Egress" is added to policyTypes.
+  egress: []
+
+  # -- Fully replace the generated ingress rules with a custom list.
+  # Useful when the built-in grpcIngress/redisProxyIngress/monitoring pattern
+  # does not fit. When set, all other ingress knobs above are ignored.
+  customIngressRules: []
+
+  # -- Additional standalone NetworkPolicy resources. The map key becomes the
+  # name suffix (<fullname>-<key>); the value is the spec.
+  # Useful for layering per-tenant/per-source rules without forking the chart.
+  extraPolicies: {}
+  # Example — allow egress to argocd components and kube-dns:
+  #   egress-argocd:
+  #     podSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/component: principal
+  #     policyTypes: [Egress]
+  #     egress:
+  #       - to:
+  #           - podSelector:
+  #               matchLabels:
+  #                 app.kubernetes.io/part-of: argocd
+  #       - to:
+  #           - namespaceSelector:
+  #               matchLabels:
+  #                 kubernetes.io/metadata.name: kube-system
+  #             podSelector:
+  #               matchLabels:
+  #                 k8s-app: kube-dns
+  #         ports:
+  #           - protocol: UDP
+  #             port: 53
+
 ## @section  Pod Disruption Budget
+# NOTE: A PDB is only useful when replicaCount > 1. With the default
+# replicaCount: 1 and minAvailable: 1, voluntary evictions (node drain,
+# cluster upgrades) are blocked indefinitely since there is no second
+# replica to take over. Scale replicaCount > 1 before enabling.
 podDisruptionBudget:
   enabled: false
   minAvailable: 1

@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "argocd-agent-principal.fullname" . }}
+  name: {{ include "argocd-agent-principal.grpcServiceName" . }}
   namespace: {{ include "argocd-agent-principal.namespace" . }}
   labels:
     {{- include "argocd-agent-principal.labels" . | nindent 4 }}
@@ -18,6 +18,6 @@ spec:
   - name: https
     protocol: TCP
     port: {{ .Values.service.grpc.port }}
-    targetPort: 8443
+    targetPort: principal
   selector:
     {{- include "argocd-agent-principal.selectorLabels" . | nindent 4 }}
