@@ -14,6 +14,10 @@
 # limitations under the License.
 
 set -euo pipefail
+# Propagate failures from command substitutions (e.g., $(yq ...)) into the
+# parent shell. Without this, a broken yq pipeline could exit non-zero while
+# the caller silently continues with an empty value.
+shopt -s inherit_errexit 2>/dev/null || true
 
 # Script directory
 SCRIPT_DIR="$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
@@ -26,7 +30,7 @@ CHARTS=(
 )
 
 # Check required binaries
-required_binaries="yq jq"
+required_binaries="yq jq helm"
 for bin in $required_binaries; do
 	if ! command -v "$bin" >/dev/null 2>&1; then
 		echo "Error: Required binary '$bin' not found in \$PATH" >&2
@@ -35,10 +39,46 @@ for bin in $required_binaries; do
 			echo "  yq: https://github.com/mikefarah/yq#install" >&2
 		elif [ "$bin" = "jq" ]; then
 			echo "  jq: https://stedolan.github.io/jq/download/" >&2
+		elif [ "$bin" = "helm" ]; then
+			echo "  helm: https://helm.sh/docs/intro/install/" >&2
 		fi
 		exit 1
 	fi
 done
+
+# The script uses Mike Farah's Go yq (`yq eval -o=json`). Other yq
+# implementations — notably kislyuk's Python yq, which is a thin jq wrapper —
+# use incompatible syntax and will emit garbage output while the script
+# believes it succeeded. Detect and reject anything else up front.
+if ! yq --version 2>&1 | grep -qi 'mikefarah'; then
+	echo "Error: incompatible yq detected. This script requires Mike Farah's yq." >&2
+	echo "  Detected: $(yq --version 2>&1 | head -n1)" >&2
+	echo "  Install:  https://github.com/mikefarah/yq#install" >&2
+	exit 1
+fi
+
+# Check if files exist
+if [ ! -f "$VALUES_YAML" ]; then
+	echo "Error: values.yaml not found at $VALUES_YAML" >&2
+	exit 1
+fi
+
+if [ ! -f "$SCHEMA_JSON" ]; then
+	echo "Error: values.schema.json not found at $SCHEMA_JSON" >&2
+	exit 1
+fi
+
+CHART_DIR="$(dirname "$VALUES_YAML")"
+
+# Validate values.yaml against the schema using helm lint. This enforces
+# `required`, types, and enum constraints that path-based membership cannot
+# detect (e.g., deleting a required top-level block from values.yaml).
+echo "==> Validating values.yaml against values.schema.json (helm lint)"
+if ! lint_output=$(helm lint --quiet "$CHART_DIR" 2>&1); then
+	echo "Error: helm lint failed; values.yaml does not satisfy values.schema.json:" >&2
+	echo "$lint_output" >&2
+	exit 1
+fi
 
 # Function to extract all paths from YAML (recursive)
 extract_yaml_paths() {
@@ -49,12 +89,16 @@ extract_yaml_paths() {
 	local json_data
 	json_data=$(echo "$data" | yq eval -o=json -)
 	
-	# Extract all keys recursively
+	# Emit every path (to scalars, objects, and arrays) as a dot-joined
+	# string. Numeric array indices are dropped so paths align with schema
+	# property paths (which describe `items`, not indexes). Using `paths`
+	# instead of `paths(scalars)` ensures empty objects/arrays (e.g.
+	# `tolerations: []`, `dnsConfig: {}`) are still compared to the schema.
 	echo "$json_data" | jq -r '
-		def paths_to_strings:
-			paths(scalars) as $p | 
-			$p | map(tostring) | join(".");
-		paths_to_strings
+		paths
+		| map(select(type == "string"))
+		| select(length > 0)
+		| join(".")
 	'
 }
 

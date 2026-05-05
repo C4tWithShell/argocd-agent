@@ -57,7 +57,7 @@ Kubernetes: `>=1.24.0-0`
 | logFormat | string | `"text"` | Log format for the agent (text or json). |
 | logLevel | string | `"info"` | Log level for the agent. |
 | metricsPort | string | `"8181"` | Metrics server port exposed by the agent. |
-| nameOverride | string | `""` | Override the chart name used in `app.kubernetes.io/name`. Also changes `spec.selector.matchLabels`, which is immutable — do not set after initial install unless you are prepared to delete+reinstall. |
+| nameOverride | string | `""` | Override the chart name used in `app.kubernetes.io/name` Also changes `spec.selector.matchLabels`, which is immutable — do not set after initial install unless you are prepared to delete+reinstall. |
 | namespaceOverride | string | `""` | Override namespace to deploy the agent into. Leave empty to use the release namespace. |
 | networkPolicy | object | `{"customIngressRules":[],"egress":[],"enabled":false,"extraIngress":[],"extraPolicies":{},"monitoringNamespace":"monitoring"}` | NetworkPolicy for the agent Pod. The agent does not expose gRPC; only metrics (8181) and healthz (8002) need ingress rules by default. Egress to the principal and Redis is left open unless `egress` is explicitly set. |
 | networkPolicy.customIngressRules | list | `[]` | Fully replace the generated ingress rules with a custom list. When set, the built-in metrics/healthz rule is ignored. |
@@ -87,7 +87,7 @@ Kubernetes: `>=1.24.0-0`
 | probes.readiness.timeoutSeconds | int | `2` | Timeout for readiness probe. |
 | progressDeadlineSeconds | int | `600` | Time allowed for the Deployment to make progress before the controller reports failure. |
 | rbac.create | bool | `true` | Create namespace-scoped Role and RoleBinding for the agent. |
-| rbac.createClusterRole | bool | `false` | Create cluster-scoped ClusterRole and ClusterRoleBinding. Required for destination-based mapping, create-namespace, and resource-proxy discovery across multiple namespaces. Leave `false` to keep the agent strictly namespace-scoped (default). |
+| rbac.createClusterRole | bool | `true` | Create cluster-scoped ClusterRole and ClusterRoleBinding. Required for destination-based mapping, create-namespace, and resource-proxy discovery across multiple namespaces. Leave `false` to keep the agent strictly namespace-scoped. |
 | redisAddress | string | `"argocd-redis:6379"` | Redis address used by the agent. |
 | redisTLS | object | `{"caPath":"/app/config/redis-tls/ca.crt","enabled":false,"insecure":false,"secretName":"argocd-redis-tls"}` | Redis TLS configuration. |
 | redisTLS.caPath | string | `"/app/config/redis-tls/ca.crt"` | Path to CA certificate for verifying Redis TLS certificate. This path is where the CA certificate will be mounted inside the container. |

@@ -5,8 +5,8 @@
 ## @section Global
 # -- Override namespace to deploy the agent into. Leave empty to use the release namespace.
 namespaceOverride: ""
-# -- Override the chart name used in `app.kubernetes.io/name`. Also changes
-# `spec.selector.matchLabels`, which is immutable — do not set after initial
+# -- Override the chart name used in `app.kubernetes.io/name`
+# Also changes `spec.selector.matchLabels`, which is immutable — do not set after initial
 # install unless you are prepared to delete+reinstall.
 nameOverride: ""
 # -- Override the fully-qualified resource name (defaults to `<release>-agent-helm`).
@@ -100,6 +100,43 @@ serviceAccount:
   name: ""
   # -- Annotations to add to the ServiceAccount.
   annotations: {}
+
+## @section Pod security context
+# -- Pod-level securityContext. Applied to the Pod spec.
+podSecurityContext:
+  fsGroup: 999
+  fsGroupChangePolicy: "OnRootMismatch"
+  runAsGroup: 999
+  runAsNonRoot: true
+  runAsUser: 999
+  seccompProfile:
+    type: RuntimeDefault
+
+## @section Container security context
+# -- Container-level securityContext. Applied to the agent container.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsGroup: 999
+  runAsNonRoot: true
+  runAsUser: 999
+  seccompProfile:
+    type: RuntimeDefault
+
+
+## @section RBAC
+rbac:
+  # -- Create namespace-scoped Role and RoleBinding for the agent.
+  create: true
+  # -- Create cluster-scoped ClusterRole and ClusterRoleBinding. Required for
+  # destination-based mapping, create-namespace, and resource-proxy discovery
+  # across multiple namespaces. Leave `false` to keep the agent strictly
+  # namespace-scoped.
+  createClusterRole: true
 
 ## @section Pod Scheduling and Metadata
 # -- Node selector for scheduling the agent Pod.
